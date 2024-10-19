@@ -90,10 +90,9 @@ Pythonが動作するOSなら多分どれでも。
 * Zabbix 4.0 Later
 * Python 3.9 Later
 
-Zabbixのバージョンは4.0以降（開発系は除外）に対応します。
+Zabbixのバージョンは4.0以降（開発系は除外）に対応予定です。
 
-必要なPythonライブラリ
-
+必要なPythonライブラリ:
 * pyzabbix
 * redis
 * boto3
@@ -208,40 +207,46 @@ ZabbixCloneでは、Zabbixサーバーをノードと呼んでいます。
 元は設定マスターのZabbixから監視実行Zabbixへ設定を複製しクラスター動作させることを目的としています。
 
 ### マスターノード
-    設定マスターZabbix / role: master
-    全てのZabbix設定のマスターとなるZabbix。
-    「ZC_UUID: UUID」のタグで、ホストのユニークを管理する。このタグはホストに存在しなければマスターノードの複製作成時に自動的に設定される。
-    ホスト名変えてもZC_UUIDが変わらなければ同じホスト扱いとなる。
-    テンプレート、ホストグループ、トリガーに既にあるパラメーターなため、Zabbixが同様にホストにも適用した場合はオミットされる。
-    基本的にすべての設定をマスターノードからAPIで取得するが、シークレット情報はZabbix APIは出力しないため設定ファイルに記述する。
-    マスターノードでは監視無効にしてあるホストは、ワーカーノードで設定する際に有効になる。
+設定マスターZabbix / role: master
+
+全てのZabbix設定のマスターとなるZabbix。
+
+「ZC_UUID: UUID」のタグで、ホストのユニークを管理する。このタグはホストに存在しなければマスターノードで[clone](#clone)実行時に自動で設定します。ホスト名変えてもZC_UUIDが変わらなければ同じホスト扱いとなります。UUIDはテンプレート、ホストグループ、トリガーに既にあるためZabbix公式がホストにも適用した場合はそちらを使い、ZC_UUDタグはオミットします。
+
+基本的にすべての設定をマスターノードからAPIで取得しますがシークレット情報はZabbix APIは出力しないため、設定ファイルに[記述](#zabbix追加設定)します。
+
+マスターノードで監視無効にしてあるホストでも、ワーカーノードで設定する際に有効になります。
 
 ### ワーカーノード
-    監視実行Zabbix / role: worker
-    監視を実行するZabbixで、マスターノードと同じかそれより新しいバージョンのZabbixでなければならない。
-    適用する設定のバージョンを指定しない場合、ストアにある最新のデータでが適用される。
-    マスターノード側でホストにタグ（ZC_WORKER:ノード名）で動作するワーカーノードを指定し、そのホストのみを対象のワーカーノードに複製する。
-    ホストの複製時、自動的に監視開始状態にする。
-    ホスト以外の設定は基本的に全て適用される。
-    ワーカーノードのに存在しない設定は生成、存在する設定は更新される。
-    マスターノードの設定に無く、ワーカーノードに存在する設定は削除される。
+監視実行Zabbix / role: worker
+
+監視を実行するZabbixで、マスターノードと同じかそれより新しいバージョンのZabbixでなければいけません。
+
+適用する設定のバージョンを指定しない場合、ストアにある最新のデータが適用されます。
+
+ホストにタグ（ZC_WORKER:ノード名）で動作するワーカーノードを指定し、そのワーカーノードで[clone](#clone)実行時に指定されたホストが複製されます。
+ホストは複製時に自動で監視開始状態になります。
+
+ホスト以外の設定は基本的に全て適用されます。<br>
+例外として、ユーザーに設定されているメディアタイプ設定は複製されません。メディアタイプ設定は設定ファイルに[記述](#通知メディア設定)して一元管理します。
+
+ワーカーノードのに存在しない設定は生成、存在する設定は更新されます。
+マスターノードの設定に無く、ワーカーノードに存在する設定は[削除不要](#既存設定削除の不実行)を指定しない限り削除されます。
 
 ### レプリカノード
-    マスターノードの複製 / role: replica
-    ワーカーノードとの違いは全ホストを複製するが、監視有効にしない。
-    ユーザーに設定される通知設定は複製されない。
+マスターノードの複製 / role: replica
+
+ワーカーノードと違い全ホストを複製し、監視は有効にしません。
+また、ユーザーのメディアタイプ設定は設定されません。
 
 ## ストア
-ローカルファイル(file)  / AWS DynamoDB（dydb） / Redis（redis） / マスターノード直接（direct）
+ローカルファイル(file)  / AWS DynamoDB（dydb） / Redis（redis） / マスターノード直接（direct）<br>
 デフォルトはローカルファイル
 
 基本的にマスターノードの設定はストアに保存します。
 設定は取得した際にUUIDのバージョン番号が付与されます。
-マスターノードから直接設定を取得し、ワーカーノードに適用することも可能ですが、その際にはバージョン管理はできません。
 
 ### ローカルファイル
-    store type: file
-
     ディレクトリ:
         Linux: /var/lib/zabbix/zc
         Windows: ユーザープロファイル\マイドキュメント\zc
@@ -249,17 +254,12 @@ ZabbixCloneでは、Zabbixサーバーをノードと呼んでいます。
     ファイル名フォーマット:
         バージョンUUID_タイムスタンプ_マスターノードZabbixバージョン.bz2
 
-    ・バージョン指定は「UUIDのバージョン番号」を利用する
-    ・バージョン指定がない場合は作成タイムスタンプが最新のものを利用する
-    ・ファイルの場所は指定できない
-    ・ディレクトリを自動作成はしない
+- バージョン指定は「UUIDのバージョン番号」を利用する。
+- バージョン指定がない場合は作成タイムスタンプが最新のものを利用する。
+- ファイルの場所は指定できない。
+- ディレクトリを自動作成はしない。
 
 ### AWS DynamoDB
-    store type: dydb
-    
-    次の２つのテーブルが必要、自動的に作成はしない
-    テーブルはそれぞれ以下の設定
-
     ZC_VERSION バージョン情報
         VERSION_ID      (S) Partition Key
         UNIXTIME        (N) Sort Key
@@ -273,12 +273,9 @@ ZabbixCloneでは、Zabbixサーバーをノードと呼んでいます。
         NAME            (S) メソッド内のユニーク名称
         DATA            (B) 内容のJSON出力 -> bz2圧縮
 
-### Redis
-    store type: redis
-    
-    DBを２つ利用
-    パスワード利用可能
+- 上記２つのテーブルは自動的に作成はしない。
 
+### Redis
     db:0    バージョン情報  hash
         VERSION_ID: {
             'UNIXTIME': b'1234567890',
@@ -291,58 +288,74 @@ ZabbixCloneでは、Zabbixサーバーをノードと呼んでいます。
             ...
         }
 
+- DBを２つ利用する。
+- パスワードを利用可能。
+
 ### マスターノード直接
-    store type: direct
-    
-    マスターノード直接はマスターノードの現在の設定を直接ワーカーノードに適用するのでバージョン管理はできない
-    マスターノードでの作業はなく、ワーカーノード設定だけで実行する
-    マスターノードへの認証はトークンのみを利用できる
+
+- マスターノードの現在の設定を直接適用するのでバージョン管理はできない
+- マスターノードでの作業はなく、ワーカーノード設定だけで実行する
+- マスターノードへの認証はトークンのみを利用できる
 
 ## 実行
 
 ### COMMAND
 
-    clone : 複製の実行
-    showversions: ストアに保存されているバージョンの確認
-    showdata: ストアに保存されている対象バージョンのデータ確認
-    delete: 対象バージョンの特定データを削除（未実装）
-    clearstore: ストア内のデータをすべて削除（未実装）
+|name|discription|
+|:-:|:-|
+|clone       |複製の実行|
+|showversions|ストアに保存されているバージョンの確認|
+|showdata    |ストアに保存されている対象バージョンのデータ確認|
+|delete      |対象バージョンの特定データを削除（未実装）|
+|clearstore  |ストア内のデータをすべて削除（未実装）|
 
 
 #### clone
 ```sh
 # マスターノードからの設定取得実行
-zc.py clone --role master --node master-zabbix --store-type file --endpoint http://master-zabbix.example.com/ --user Admin --password zabbix
+zc.py clone --role master \
+            --node master-zabbix \
+            --store-type file \
+            --endpoint http://master-zabbix.example.com/ \
+            --user Admin \
+            --password zabbix
 ```
 
 ```sh
 # ワーカーノードへの設定複製実行
-zc.py clone --role worker --node worker-zabbix --store-type file --endpoint http://worker-zabbix.example.com/ --user Admin --password zabbix
+zc.py clone --role worker \
+            --node worker-zabbix \
+            --store-type file \
+            --endpoint http://worker-zabbix.example.com/ \
+            --user Admin \
+            --password zabbix
 ```
 ##### option
+```sh
+    # 対象Zabbixの役割
     --role {master,worker,replica}
-    対象Zabbixの役割
 
+    # 対象Zabbixのサーバー名
     --node value
-    対象Zabbixのサーバー名
 
+    # ストアの指定
+    # default: file
     --store-type {file,dydb,redis,direct}
-    default: file
-    データ保存方法の指定
 
+    # 対象のワーカーノードの強制初期化
     --force-initialize
-    対象のワーカーノードの強制初期化
 
+    # テンプレートのインポートを実行しない
     --template-skip
-    テンプレートのインポートを実行しない
 
+    # ワーカーノードに既にある設定を消さない
+    # 強制初期化が優先される
     --no-delete
-    ワーカーノードに既にある設定を消さない
-    強制初期化が優先される
 
+    # ホスト適用後、LLDすべてと指定監視間隔のアイテムの値取得を実行する
+    # default: 1h
     --checknow-execute
-    default: 1h
-    ホスト設定適用後、LLDすべてと指定監視間隔のアイテムの値取得を実行する
+```
 
 #### showversions
 ```sh
@@ -351,28 +364,31 @@ zc.py showversions
 ```
 
 ##### option
+```sh
+    # バージョンIDとタイムスタンプ（UNIXTIME）のみ表示
     --id-only
-    バージョンIDとタイムスタンプ（UNIXTIME）のみ表示
-
+```
 #### showdata
 ```sh
 # 保存データの確認
 zc.py showdata --version xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 ```
 ##### required
+```sh
+    # value: バージョンID
     --version value, -v value
-    value: バージョンID
-    
+```
 ##### option
+```sh
+    # バージョンIDとタイムスタンプ（UNIXTIME）のみ表示
     --id-only
-    バージョンIDとタイムスタンプ（UNIXTIME）のみ表示
 
+    # 指定のメソッドのみ表示
     --method value [value ...]
-    指定のメソッドのみ表示
 
+    # 指定の名称のみ表示
     --name value [value ...]
-    指定の名称のみ表示
-
+```
 
 ## 設定
 
@@ -383,294 +399,286 @@ zc.py showdata --version xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 ### 設定ファイル
 
 #### 設定ファイルの指定
-    COMMAND: --config-file value, -f value
-    value: パス付の任意の設定ファイル
+    COMMAND: --config-file VALUE, -f VALUE
+    VALUE: config file with PATH
+
+設定ファイルを指定した場合、固定の設定ファイルは読み込みません。
 
 #### 設定ファイル不使用
     COMMAND: --no-config-files
 
-    コマンド引数で指定した場合、設定ファイルを読み込まない
+不使用を指定した場合、コマンド引数のみを使います。
 
 ### 基本設定
 
 #### ノード名
-    COMMAND: --node value, -n value
-    CONFIG: {"node": "value"}
-    value: 任意のZabbixサーバー名
+    COMMAND: --node VALUE, -n VALUE
+    CONFIG: {"node": VALUE}
+    VALUE: ZABBIX_SERVER_NAME
     
-    ログインページ内の「<div class="server-name>node">value</div>」を確認する
-    適用時、次の機能は複製データの内容を確認しノード名が同じなら実行する
-        ホスト: タグ「ZC_WORKER」の値
-        プロキシー: ディスクリプションに記述された「ZC_WORKER:ノード名;」
+最初にログインページ内の`<div class="server-name>node">VALUE</div>`を確認します。
+
+適用時、次の機能は複製データの内容を確認しノード名と同じなら実行します。
+- ホスト: タグ「ZC_WORKER」の値
+- プロキシー: ディスクリプションに記述された「ZC_WORKER:ノード名;」
 
 #### ロール
-    COMMAND: --role value, -r value
-    CONFIG: {"role": "value"}
-    value:
-        master: 設定マスター
-        worker: 監視実行
-        develop: 監視不実行の設定コピー
+    COMMAND: --role VALUE, -r VALUE
+    CONFIG: {"role": VALUE}
+    VALUE: master, worker, replica
     default: worker
     
 ### 接続
 
 #### Zabbixエンドポイント
-    COMMAND: --endpoint value, -e value
-    CONFIG: {"endpoint": "value"}
-    value: ZabbixのURL
+    COMMAND: --endpoint VALUE, -e VALUE
+    CONFIG: {"endpoint": VALUE}
+    VALUE: Zabbix URL
     default: http://localhost:8080/
 
-    操作対象のZabbixエンドポイント指定
-    api_jsonrpc.phpの記述は不要
+`api_jsonrpc.php`は不要です。
 
 #### 複製実行ユーザー
-    COMMAND: --user value, -u value
-    CONFIG: {"user": "value"}
-    value: 任意のZabbixユーザー
+    COMMAND: --user VALUE, -u VALUE
+    CONFIG: {"user": VALUE}
+    VALUE: Zabbix Super Administration User
     default: Admin
 
-    Zabbixへパスワード認証する場合のユーザー名
-    デフォルトはZabbix初期値
-
 #### 複製実行ユーザーのパスワード
-    COMMAND: --password value, -p value
-    CONFIG: {"password": "value"}
-    value: 任意のパスワード
+    COMMAND: --password VALUE, -p VALUE
+    CONFIG: {"password": VALUE}
+    VALUE: Zabbix Super Admin's password / update password
     default: zabbix
 
-    Zabbixへパスワード認証する場合のパスワード
-    また変更用のパスワード
-    デフォルトはZabbix初期値
+[パスワード変更](#パスワード変更)を有効にした場合、このパスワードで更新します。
 
 #### 複製実行ユーザーのトークン
-    COMMAND: --token value, -t value
-    CONFIG: {"token": "value"}
-    value: 任意のトークン/セッションID
+    COMMAND: --token VALUE, -t VALUE
+    CONFIG: {"token": VALUE}
+    VALUE: zabbix token / sessionid
 
-    Zabbixへトークン認証する場合のトークン
-    パスワードとトークン認証が設定されている場合、トークン認証が優先される
-    Zabbix5.4以前はトークン機能が存在しないが、クッキーのセッションIDが同じように利用できる
+パスワードとトークン認証が設定されている場合、トークン認証が優先されます。<br>
+Zabbix5.4以前はトークン機能が存在しませんが、セッションIDがトークンの代わりに利用できます。
 
 #### HTTP認証
     COMMAND: --http-auth
     CONFIG: {"http_auth": "YES|NO"}
-    default: "NO"
+    default: NO
 
-    HTTP認証をZabbixで利用する
-    トークン認証が無効化される
+HTTP認証をZabbixで利用する場合に有効にします。<br>
+この場合、トークン認証はできません。
 
 #### 自己証明書の利用
     COMMAND: --self-cert
     CONFIG: {"self_cert": "YES|NO"}
-    default: "NO"
+    default: NO
 
-    自己証明書を利用している場合、確認をスキップする
+自己証明書を利用している場合、有効にすると確認をスキップします。
 
 ### 実行設定
 
 #### パスワード変更
     COMMAND: --update-password
     CONFIG: {"update_password": "YES|NO"}
-    default: "NO"
+    default: NO
 
-    複製実行ユーザーのパスワードに設定されている値で接続ユーザーのパスワードを更新する
-    有効になっている場合、トークン認証またはZabbixの初期認証情報を利用する
+複製実行ユーザーの[設定されている値](#複製実行ユーザーのパスワード)で複製実行ユーザーのパスワードを更新します。<br>
+有効になっている場合、まずZabbixのデフォルト認証情報で試行します。<br>
+デフォルト認証情報で認証できなかった場合、トークン認証が設定されていればそちらを試行します。<br>
+既に変更が実行されていれば何もしません。
 
 #### 強制初期化
     COMMAND: --force-initialize
     CONFIG: {"force_initialize": "YES|NO"}
-    default: "NO"
+    default: NO
 
-    対象の全設定を削除する
-    ZabbixCloneで複製されていない対象の場合、この設定がなくても強制的に初期化される
+ワーカーノード上の全設定を削除します。<br>
+複製が実行されたことのないワーカーノードの場合、この設定がなくても強制的に初期化されます。
 
 #### IPアドレス利用の強制
     COMMAND: --force-userip
     CONFIG: {"force_useip": "YES|NO"}
-    default: "NO"
+    default: NO
 
-    ホストの接続設定を強制的にIPアドレスに変更する
-    対象のワーカーノードでFQDNからIPアドレスに変換できない場合はFQDNから変更しない
+ホストの監視先設定を強制的にIPアドレスに変更します。<br>
+FQDNからIPアドレスに変換できない場合、FQDNから変更しません。
 
 #### ホスト設定の強制更新
     COMMAND: --force-host-update
     CONFIG: {"force_host_update": "YES|NO"}
-    default: "NO"
+    default: NO
 
-    ホストのホスト名が同じだがZC_UUIDが違う場合は更新しないが、これを有効にした場合は上書き更新を行う
+ホスト名が同じでZC_UUIDが違う場合はデフォルトでは更新しませんが、有効にした場合は上書き更新します。
 
 #### 既存設定削除の不実行
     COMMAND: --no-delete
     CONFIG: {"no_delete": "YES|NO"}
-    default: "NO"
+    default: NO
     
-    各監視対象が監視マスターのデータにないものは削除されるが、これを有効にした場合は削除しない
+各監視対象が監視マスターのデータにないものはデフォルトでは削除しますが、有効にした場合は削除しません。
 
 #### テンプレートのスキップ
     COMMAND: --template-skip
     CONFIG: {"template_skip": "YES|NO"}
-    default: "NO"
+    default: NO
 
-    マスターノード側でテンプレートのエクスポートを実行しない
-    ワーカーノード側でテンプレートのインポートを実行しない
+マスターノード側で有効にした場合、テンプレートのエクスポートを実行しません。<br>
+ワーカーノード側で有効にした場合、テンプレートのインポートを実行しません。
 
 #### テンプレートの分離数
-    COMMAND: --template-separate integer
-    CONFIG: {"template_separate": integer}
+    COMMAND: --template-separate INTEGER
+    CONFIG: {"template_separate": INTEGER}
+    default: 50
 
-    マスターノード側でテンプレートのエクスポートを分離数ごとに実行する
-    ワーカーノード側での処理はない
+マスターノード側で有効にした場合、テンプレートのエクスポートを分離数ごとに実行します。<br>
+エクスポート処理でphpの実行メモリが足りない場合、HTTP 500エラーになります。その場合はこの設定で分離数を減らしてください。
+
+ワーカーノード側での処理はありません。
 
 #### CheckNowの実行
     COMMAND: --checknow-execute
     CONFIG: {"checknow_execute": "YES|NO"}
-    default: "NO"
+    default: NO
 
-    これを有効にした場合、ホストをワーカーノードに適用後に全LLDと任意の監視間隔のアイテムの値取得を実行する
-    依存アイテムの場合、親アイテムも実行する
+これを有効にした場合、ホストをワーカーノードに適用後に全LLDと任意の監視間隔のアイテムの値取得を実行します。依存アイテムの場合、親アイテムも実行します
 
 #### CheckNowを実行する監視間隔
-    COMMAND: --checknow-interval value [value ...]
-    CONFIG: {"checknow_interval": ["value", "value", ...]}
+    COMMAND: --checknow-interval VALUE [VALUE ...]
+    CONFIG: {"checknow_interval": [VALUE, VALUE, ...]}
     default: 1h
 
-    アイテムの値取得を実行する対象の監視間隔の指定
-    タイムサフィックス(m, h, d)は秒に展開される
+アイテムの値取得を実行する監視間隔の指定で、複数指定できます。タイムサフィックス(m, h, d)は秒に展開されます。
 
 #### ホスト適用の並列実行数
-    COMMAND: --php-worker-num integer
-    CONFIG: {"php_worker_num": integer}
+    COMMAND: --php-worker-num INTEGER
+    CONFIG: {"php_worker_num": INTEGER}
     default: 4
 
-    ホストのワーカーノードへの適用を並列実行する数
-    php-fpmでこれを変更する場合、プロセス数を合わせて変更しなければ実行速度が落ちる可能性がある
+ホストのワーカーノードへの適用を並列実行する数。
+php-fpmでこれを変更する場合、プロセス数を合わせて変更しなければ実行速度が落ちる可能性があります。
 
 ### ストア設定
 
 #### ストアの指定
-    COMMAND: --store-type value, -s value
-    CONFIG: {"store_type": "value"}
-    value: 
-        file: ローカルファイル
-        dydb: AWS DynamoDB
-        redis: Redis
-        direct: マスターノード直接
+    COMMAND: --store-type VALUE, -s VALUE
+    CONFIG: {"store_type": VALUE}
+    VALUE: file, dydb, redis, direct
     default: file
 
-    Zabbix設定の保存先指定
+Zabbix設定の保存先を指定します。
 
 #### AWS DynamoDBの接続設定
 
 ##### AWS Account IDの指定
 
-    COMMAND: --store-access value, -sa value
-    CONFIG: {"store_connect": {"aws_ccount_id": "value"}}
-    value: AWS Account ID
+    COMMAND: --store-access VALUE, -sa VALUE
+    CONFIG: {"store_connect": {"aws_ccount_id": VALUE}}
+    VALUE: AWS Account ID
 
-    .aws/credentialを利用しない場合に設定する
+.aws/credentialを利用しない場合に設定します。
 
 ##### AWS Secret Keyの指定
 
-    COMMAND: --store-credential value, -sc value
-    CONFIG: {"store_connect": {"aws_secret_key": "value"}}
-    value: AWS Secret Key
+    COMMAND: --store-credential VALUE, -sc VALUE
+    CONFIG: {"store_connect": {"aws_secret_key": VALUE}}
+    VALUE: AWS Secret Key
 
-    .aws/credentialを利用しない場合に設定する
+.aws/credentialを利用しない場合に設定します。
 
 ##### AWS Regionの指定
-    COMMAND: --store-endpoint value, -se value
-    CONFIG: {"store_connect": {"aws_region": "value"}}
-    value: AWS Secret Key
+    COMMAND: --store-endpoint VALUE, -se VALUE
+    CONFIG: {"store_connect": {"aws_region": VALUE}}
+    VALUE: AWS Secret Key
     default: us-east-1
 
-    .aws/credentialを利用しない場合に設定する
+.aws/credentialを利用しない場合に設定します。
 
 ##### 操作レコードの制限数
-    COMMAND: --store-limit integer
-    CONFIG: {"store_connect": {"dydb_limit": integer}}
+    COMMAND: --store-limit INTEGER
+    CONFIG: {"store_connect": {"dydb_limit": INTEGER}}
     default: 100
 
-    DymanoDBの負荷制御のパラメータ―、制限数
-    制限数ごとに待機秒数のインターバルを挟む
+DymanoDBの負荷制御のパラメータ―、制限数
+制限数ごとに待機秒数のインターバルを挟みます。
 
 ##### バッチ操作待機秒数
-    COMMAND: --store-interval integer
-    CONFIG: {"store_connect": {"dydb_wait": integer}}
+    COMMAND: --store-interval INTEGER
+    CONFIG: {"store_connect": {"dydb_wait": INTEGER}}
     default: 1
 
-    DymanoDBの負荷制御のパラメータ―、待機秒数
-    制限数ごとに待機秒数のインターバルを挟む
+DymanoDBの負荷制御のパラメータ―、待機秒数
+制限数ごとに待機秒数のインターバルを挟みます。
 
 #### Redisの接続設定
 
 ##### Redisのエンドポイント
-    COMMAND: --store-endpoint value, -se value
-    CONFIG: {"store_connect": {"redis_host": "value"}}
-    value: IP/FQDN
+    COMMAND: --store-endpoint VALUE, -se VALUE
+    CONFIG: {"store_connect": {"redis_host": VALUE}}
+    VALUE: IP/FQDN
     default: localhost
 
-    Redisの接続先指定 
+Redisの接続先を指定します。 
 
 ##### Reidsのポート
-    COMMAND: --store-port value, -sp value
-    CONFIG: {"store_connect": {"redis_port": value}}
-    value: integer
+    COMMAND: --store-port VALUE, -sp VALUE
+    CONFIG: {"store_connect": {"redis_port": VALUE}}
+    VALUE: INTEGER
     default: 6379
 
-    Redisの接続先ポート指定
+Redisの接続先ポートを指定します。
 
 ##### Reidsのパスワード
-    COMMAND: --store-credential value, -sc value
-    CONFIG: {"store_connect": {"redis_password": "value"}}
-    value: 任意のパスワード
+    COMMAND: --store-credential VALUE, -sc VALUE
+    CONFIG: {"store_connect": {"redis_password": VALUE}}
+    VALUE: redis's setting, 'requirepass'
 
-    Redisの接続パスワード
+Redisの接続パスワードを指定します。
 
 #### マスターノード直接の接続設定
 
 ##### マスターノード名
-    COMMAND: --store-access value, -sa value
-    CONFIG: {"store_connect": {"direct_node": "value"}}
-    value: マスターノードのZabbixサーバー名
+    COMMAND: --store-access VALUE, -sa VALUE
+    CONFIG: {"store_connect": {"direct_node": VALUE}}
+    VALUE: master-node ZABBIX_SERVER_NAME
 
-    マスターノードの接続先のZabbixサーバー名
-    接続時に確認する
+マスターノードの接続先のZabbixサーバー名を指定します。
 
 ##### マスターノードエンドポイント
-    COMMAND: --store-endpoint value, -se value
-    CONFIG: {"store_connect": {"direct_endpoint": "value"}}
-    value: マスターノードZabbix URL
+    COMMAND: --store-endpoint VALUE, -se VALUE
+    CONFIG: {"store_connect": {"direct_endpoint": VALUE}}
+    VALUE: master-node Zabbix URL
 
-    マスターノードのZabbixエンドポイント指定
-    api_jsonrpc.phpの記述は不要
+マスターノードのZabbixエンドポイントを指定します。
+`api_jsonrpc.php`の記述は不要です。
 
 ##### マスターノードトークン
-    COMMAND: --store-credential value, -sc value
-    CONFIG: {"store_connect": {"direct_token": "value"}}
-    value: マスターノードのトークン
+    COMMAND: --store-credential VALUE, -sc VALUE
+    CONFIG: {"store_connect": {"direct_token": VALUE}}
+    VALUE: master-node Super Admin's Token
 
-    マスターノードの特権管理者権限トークン
+マスターノードの特権管理者権限トークンを指定します。
 
 ### Zabbix追加設定
 
 #### 暗号化グローバルマクロ
-    CONFIG: {"secret_globalmacro": [value, value, ...]}
-    value: {"macro": "macro_name", "value": "macro_value"}
+    CONFIG: {"secret_globalmacro": [VALUE, VALUE, ...]}
+    VALUE: {"macro": macro_name, "value": macro_VALUE}
 
-    暗号化マクロの値はAPIで取得できないため、設定ファイルに記述した暗号化グローバルマクロmacro_nameにmacro_valueを設定する
+暗号化マクロの値はZabbix APIで取得できないため、設定ファイルに暗号化対象のグローバルマクロの内容を指定します。
 
 #### プロキシーの通信暗号化
-    CONFIG: {"proxy_psk": {"proxy": ["psk_identity", "psk"]}}
+    CONFIG: {"proxy_psk": VALUE}
+    VALUE: {proxy_name: [psk_identity, psk]}
 
-    pskはAPIで取得できないため、設定ファイルに記述したものを設定する
+pskはZabbix APIで取得できないため、設定ファイルに指定したものを設定します。
 
 #### 一般設定
 一般設定の内、Zabbix7.0以降対応のデータ収集のタイムアウト設定と重要度名称を設定ファイルから設定します。
 ワーカーノード側でマスターノードと違う設定を可能にします。
 
 ##### データ収集のタイムアウト設定
-    CONFIG: {"settings": {"timeout": {"target": "value"}}}
-    target:
+    CONFIG: {"settings": {"timeout": {TARGET: VALUE}}}
+    TARGET:
         zabbix_agent
         simple_check
         snmp_agent
@@ -681,41 +689,44 @@ zc.py showdata --version xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
         telnet_agent
         script
         browser
-    value: 1s-(600s|10m)
+    VALUE: 1s-(600s|10m)
     default:
         external_check: 15s
 
-    targetのタイムアウト設定を1秒から600秒の範囲で指定する
-    external_checkのみ、初期設定の5sではタイムアウト発生でZabbix Serverの不正終了が頻発するためデフォルト15sを設定（7.0.2での確認）
+targetのタイムアウト設定を1秒から600秒の範囲で指定します。
+external_checkのみ、初期設定の5sではタイムアウト発生でZabbix Serverの不正終了が頻発するためデフォルト15sを設定します。（7.0.2での確認）
 
 ##### 重要度名称の設定
-    CONFIG: {"settings": {"severity": {value, value, ...}}}
-    value: {"level": {"name": "severity_name", "color": "hex_color"}}
+    CONFIG: {"settings": {"severity": {VALUE, VALUE, ...}}}
+    VALUE: {"level": {"name": "severity_name", "color": "hex_color"}}
 
-    levelは0-5の重要度レベル
+levelは0-5の重要度レベルを指定します。
+hex_colorは16進数カラーコードを指定します。
 
 #### 複製許可ユーザー
-    CONFIG: {"enable_user": value}
-    value: {"user": "password"}
+    CONFIG: {"enable_user": VALUE}
+    VALUE: {"user": "password"}
 
-    マスターノードに設定されているuserをワーカーノードに複製する
-    パスワードはAPIで取得できないため、設定ファイルに記述したものを設定する
+マスターノードに設定されているuserをワーカーノードに複製します。
+パスワードはZabbix APIで取得できないため、設定ファイルに指定したものを設定します。
 
 #### 通知メディア設定
-ワーカーノードごとに通知先設定の変更を可能にする設定です。
 
-    CONFIG: {"media_settings": {"user": value}}
-    user: マスターノードに設定されている、かつ複製許可ユーザーに設定されている
-    value: 
+    CONFIG: {"media_settings": {"user": VALUE}}
+    user: User with Notification
+    VALUE: 
         {"to": [address, address, ...]}
         {"severity": severity}
         {"work_time": work_time}
     required: to, severity, work_time
 
+ワーカーノードごとに通知先設定の変更を可能にする設定です。
+
+
 ##### severity
 
-    CONFIG: {"severity": value}
-    value: {"level": "YES|NO"}
+    CONFIG: {"severity": VALUE}
+    VALUE: {"level": "YES|NO"}
     level: 0-5
 
 ##### work_time
@@ -725,10 +736,10 @@ zc.py showdata --version xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 
 ##### MFAシークレット
 
-    CONFIG: {"mfa_client_secret": value}
-    value: {"name": "secret"}
+    CONFIG: {"mfa_client_secret": VALUE}
+    VALUE: {"name": "secret"}
 
-    Duoユニバーサルプロンプトで「name（名前）」に対応するクライアントシークレット
+Duoユニバーサルプロンプトで「name（名前）」に対応するクライアントシークレットを指定します。
 
 ### データベース設定
 Zabbix6.0より前のバージョンでは一般設定のAPIがないためデータベース操作で直接取得します。
@@ -736,36 +747,35 @@ Zabbix Server上で実行した場合、/etc/zabbix/zabbix_server.confより取�
 取得できない端末から実行する場合はこのパラメーターを設定してください。
 
 #### データベースホスト
-    COMMAND: --db-connect-host value, -dbhost value
-    CONFIG: {"db_connect": {"host": "value"}}
-    value: データベースのFQDN/IPアドレス
+    COMMAND: --db-connect-host VALUE, -dbhost VALUE
+    CONFIG: {"db_connect": {"host": VALUE}}
+    VALUE: IP/FQDN
     default: localhost
 
 #### データベース名
-    COMMAND: --db-connect-name value, -dbname value
-    CONFIG: {"db_connect": {"name": "value"}}
-    value: Zabbixデータベース名
+    COMMAND: --db-connect-name VALUE, -dbname VALUE
+    CONFIG: {"db_connect": {"name": VALUE}}
+    VALUE: Zabbix database name
     default: zabbix
 
 #### データベース種別
-    COMMAND: --db-connect-type value, -dbtype value
+    COMMAND: --db-connect-type VALUE, -dbtype VALUE
     CONFIG: {"db_connect": {"type": "mysql|pgsql"}}
-    value: データベースの種別
+    VALUE: database type
     default: pgsql
 
-    MySQL系、PostgreSQL系のみの対応
-    ポート番号の指定はない
+MySQL系、PostgreSQL系のみの対応になります。ポート番号の指定はできません。
 
 #### データベース接続ユーザー
-    COMMAND: --db-connect-user value, -dbuser value
-    CONFIG: {"db_connect": {"user": "value"}}
-    value: Zabbixデータベースへの接続ユーザー
+    COMMAND: --db-connect-user VALUE, -dbuser VALUE
+    CONFIG: {"db_connect": {"user": VALUE}}
+    VALUE: Zabbix database user
     default: zabbix
 
 #### データベース接続パスワード
-    COMMAND: --db-connect-password value, -dbpswd value
-    CONFIG: {"db_connect": {"password": "value"}}
-    value: Zabbixデータベース接続ユーザーのパスワード
+    COMMAND: --db-connect-password VALUE, -dbpswd VALUE
+    CONFIG: {"db_connect": {"password": VALUE}}
+    VALUE: Zabbix database user's password
     default: zabbix
 
 ## 動作概要
@@ -779,6 +789,8 @@ Zabbix Server上で実行した場合、/etc/zabbix/zabbix_server.confより取�
 基本的にLTSから1つ上のLTS、LTSから同じバージョン台のPoint Rleaseをテストします。
 それ以外はパターンが多すぎるのでできませんので、誰か試したら結果教えてください。
 
+トリガー条件式の変更がConfiguration.importで変換できるのかは現在不明です。
+
 |master|worker|ZabbixCloud|file|dydb|redis|direct|
 |:-:|:-:|:-:|:-:|:-:|:-:|:-:|
 |7.0|7.0||OK||OK||
@@ -787,7 +799,7 @@ Zabbix Server上で実行した場合、/etc/zabbix/zabbix_server.confより取�
 |6.0|6.2|N/A|||||
 |6.0|6.0|N/A|||||
 |5.0|6.0|N/A|?|?|?|?|
-|5.0|5.4|N/A|||||
+|5.0|5.4|N/A|?|?|?|?|
 |5.0|5.2|N/A|||||
 |5.0|5.0|N/A|||||
 |4.0|5.0|N/A|||||
@@ -819,7 +831,6 @@ Zabbix Server上で実行した場合、/etc/zabbix/zabbix_server.confより取�
 * Zabbix5.4より前はトークンのシステムがないが、セッションIDが同じものとして使える
 
 ## 現在未対応
-* レポート（ダッシュボードの指定が必要なため）
 * コネクタ（7.0機能、まだ使ったことがないのでよくわからない）
 
 ## 要確認
@@ -828,10 +839,10 @@ Zabbix Server上で実行した場合、/etc/zabbix/zabbix_server.confより取�
 ## 対応予定なし
 主にUI関連
 *  Zabbix 1.x/2.x/3.x
-* ダッシュボード
+* ダッシュボード/スクリーン
+* レポート（ダッシュボードの指定が必要なため）
 * アイコン
 * イメージ
-* トークン
 
 ## 機能追加したいもの
 * git対応
@@ -840,7 +851,7 @@ Zabbix Server上で実行した場合、/etc/zabbix/zabbix_server.confより取�
 * 失敗時の戻し
 
 # FAQ
-* 質問がたまったら作る、質問来るほど使われない気もする。
+質問がたまったら作る、質問来るほど使われない気もする。
 
 # 免責事項
 
