@@ -1,0 +1,102 @@
+{
+    "config_file": "command parameter or environ, config file full path",
+    "no_config_files": "YES|NO default:NO, Ignore in files.",
+    "node": "zabbix server name",
+    "role": "master|woker|replica",
+    "template_export_count": 50,
+    "template_skip": "YES|NO, default:NO",
+    "endpoint": "http://localhost:8080/",
+    "description": "only master node, add information.",
+    "user": "zabbix admin username",
+    "password":"zabbix admin password",
+    "update_password": "YES|NO default:NO"
+    "token": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "http_auth": "YES|NO default:NO",
+    "self_cert": "YES|NO default:NO",
+    "force_useip": "YES|NO default:NO",
+    "force_host_update": "YES|NO default:NO",
+    "delete_no_exist_master": "YES|NO default:NO",
+    "checknow_execute": "YES|NO default:NO",
+    "checknow_interval": ["1h", "{$LONGTIME}"],
+    "checknow_wait": 30,
+    "php_worker_num": 4,
+    "store_type": "redis|dydb|direct|file",
+    "store_connect": {
+        "aws_access_id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "aws_secret_key": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "aws_region": "us-east-1",
+        "dydb_limit": 100,
+        "dydb_wait": 1,
+        "redis_host": "zc-master",
+        "redis_port": 6379,
+        "redis_password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        "direct_node": "master zabbix server name",
+        "direct_endpoint": "http://master.node.endpoint/",
+        "direct_token": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxOnlyTokenAuth"
+    },
+    "db_connect": {
+        "host": "localhost",
+        "name": "zabbix",
+        "type": "mysql|pgsql",
+        "user": "zabbix",
+        "password": "zabbix"
+    },
+    "secret_globalmacro": [
+        {
+            "macro": "macro name",
+            "value": "macro value"
+        },
+        {
+            "macro": "macro name",
+            "value": "macro value"
+        }
+    ],
+    "proxy_psk": {
+        "proxy name": ["psk_identity", "psk"]
+    },
+    "settings": {
+        "timeout": {
+            "external_check": "15s",
+            "script": "15s",
+            "CHECK TYPE(READ OFFICIAL DOCUMENT)": "seconds or minutes, enable suffix s,m ONLY",
+            "RANGE": "1-600"
+        },
+        "severity": {
+            "1": {"name": "Information", "color": "HEX COLORS"},
+            "2": {"name": "NoTickets",   "color": "IGNORE EMPTY"},
+            "3": {"name": "WorkTime",    "color": ""},
+            "4": {"name": "RespondNow",  "color": ""},
+            "5": {"name": "ASAP!",       "color": ""}
+        }
+    },
+    "enable_user": {
+        "user": "password"
+    },
+    "media_settings": {
+        "use mediatype name": {
+            "target user": {
+                "to": ["alert@example.com"],
+                "severity": {
+                    "0": "YES|NO default:YES",
+                    "1": "YES|NO default:YES",
+                    "2": "YES|NO default:YES",
+                    "3": "YES|NO default:YES",
+                    "4": "YES|NO default:YES",
+                    "5": "YES|NO default:YES"
+                },
+                "work_time": {
+                    "Mon": "00:00-24:00",
+                    "Tue": "00:00-24:00", 
+                    "Wed": "00:00-24:00", 
+                    "Thu": "00:00-24:00", 
+                    "Fri": "00:00-24:00", 
+                    "Sat": "00:00-24:00", 
+                    "Sun": "00:00-24:00"
+                }
+            }
+        }
+    },
+    "mfa_client_secret": {
+        "name": "secret"
+    }
+}
