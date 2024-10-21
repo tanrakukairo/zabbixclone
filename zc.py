@@ -4813,33 +4813,32 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
 
         # ホスト削除
         # ストアデータに存在しないホストは削除する
-        if not self.CONFIG.noDelete:
-            # 対象IDリスト
-            deleteTarget = []
-            result = []
-            # update/createの両方処理済みのホスト、ここにないものを削除する
-            importHosts = [host['name'] for host in hosts]
-            for name, item in self.LOCAL['host'].items():
-                if name not in importHosts:
-                    deleteTarget.append(item['ZABBIX_ID'])
-            if deleteTarget:
-                try:
-                    self.ZAPI.host.delete(*deleteTarget)
-                    # ID->名前変換
-                    deleteTarget = '/'.join([self.replaceIdName('host', host) for host in deleteTarget])
-                    result = True
-                except Exception as e:
-                    result = e
-                # Zabbixからのデータ再取得
-                self.getDataFromZabbix()
+        # 対象IDリスト
+        deleteTarget = []
+        result = []
+        # update/createの両方処理済みのホスト、ここにないものを削除する
+        importHosts = [host['name'] for host in hosts]
+        for name, item in self.LOCAL['host'].items():
+            if name not in importHosts:
+                deleteTarget.append(item['ZABBIX_ID'])
+        if deleteTarget and not self.CONFIG.noDelete:
+            try:
+                self.ZAPI.host.delete(*deleteTarget)
+                # ID->名前変換
+                deleteTarget = '/'.join([self.replaceIdName('host', host) for host in deleteTarget])
+                result = True
+            except Exception as e:
+                result = e
+            # Zabbixからのデータ再取得
+            self.getDataFromZabbix()
 
-                # 表示（仮）
-                print(f'{TAB*2}Delete Hosts: {deleteTarget}', flush=True)
+            # 表示（仮）
+            print(f'{TAB*2}Delete Hosts: {deleteTarget}', flush=True)
 
-                if result is True:
-                    print('Success.')
-                else:
-                    print(f'Failed, {e}')
+            if result is True:
+                print('Success.')
+            else:
+                print(f'Failed, {e}')
 
         # ホストインポート処理のログ出しまたは画面出力（予）
 
@@ -4872,6 +4871,12 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 'macro': ZC_VERSION_CODE,
                 'value': version,
             }
+
+        if self.CONFIG.storeType == 'direct':
+            data['description'] = 'Master-Node: %s (%s)' % (
+                self.CONFIG.storeConnect['direct_node'],
+                self.CONFIG.storeConnect['direct_endpoint']
+            )
 
         try:
             getattr(self.ZAPI.usermacro, function)(**data)
