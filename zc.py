@@ -137,11 +137,10 @@ class ZabbixCloneConfig():
     ストア種別がdirectの時はマスター側の接続設定として扱う
     '''
 
-    result = None
-    directMaster = False
-    configFile = None
-
     def __init__(self, **params):
+        self.result = None
+        self.directMaster = False
+        self.configFile = None
         self.result = self.readConfig(**params)
 
     def readConfig(self, **params):
@@ -198,27 +197,60 @@ class ZabbixCloneConfig():
         if self.storeType == 'dydb':
             self.storeConnect.update(
                 {
-                    'awsAccessId': CONFIG.get('store_access', CONFIG.get('aws_account_id', None)),
-                    'awsSecretKey': CONFIG.get('store_credential', CONFIG.get('aws_secret_key', None)),
-                    'awsRegion': CONFIG.get('store_endpoint', CONFIG.get('aws_region', 'us-east-1')),
-                    'dydbLimit': CONFIG.get('store_limit', CONFIG.get('dydb_limit', 100)),
-                    'dydbWait': CONFIG.get('store_interval', CONFIG.get('dydb_wait' ,1)),
+                    'awsAccessId': CONFIG.get(
+                        'store_access',
+                        self.storeConnect.get('aws_account_id', None)
+                    ),
+                    'awsSecretKey': CONFIG.get(
+                        'store_credential',
+                        self.storeConnect.get('aws_secret_key', None)
+                    ),
+                    'awsRegion': CONFIG.get(
+                        'store_endpoint',
+                        self.storeConnect.get('aws_region', 'us-east-1')
+                    ),
+                    'dydbLimit': CONFIG.get(
+                        'store_limit',
+                        self.storeConnect.get('dydb_limit', 100)
+                    ),
+                    'dydbWait': CONFIG.get(
+                        'store_interval',
+                        self.storeConnect.get('dydb_wait', 1)
+                    ),
                 }
             )
         elif self.storeType == 'redis':
             self.storeConnect.update(
                 {
-                    'redisHost': CONFIG.get('store_endpoint', CONFIG.get('redis_host', 'localhost')),
-                    'redisPort': CONFIG.get('store_port', CONFIG.get('redis_port', 6379)),
-                    'redisPassword': CONFIG.get('store_credential', CONFIG.get('redis_password', None))
+                    'redisHost': CONFIG.get(
+                        'store_endpoint',
+                        self.storeConnect.get('redis_host', 'localhost')
+                    ),
+                    'redisPort': CONFIG.get(
+                        'store_port',
+                        self.storeConnect.get('redis_port', 6379)
+                    ),
+                    'redisPassword': CONFIG.get(
+                        'store_credential',
+                        self.storeConnect.get('redis_password', None)
+                    )
                 }
             )
         elif self.storeType == 'direct':
             self.storeConnect.update(
                 {
-                    'directNode': CONFIG.get('store_access', CONFIG.get('direct_node', None)),
-                    'directEndpoint': CONFIG.get('store_endpoint', CONFIG.get('direct_endpoint', None)),
-                    'directToken': CONFIG.get('store_credential', CONFIG.get('direct_token', None)),
+                    'directNode': CONFIG.get(
+                        'store_access',
+                        self.storeConnect.get('direct_node', None)
+                    ),
+                    'directEndpoint': CONFIG.get(
+                        'store_endpoint',
+                        self.storeConnect.get('direct_endpoint', None)
+                    ),
+                    'directToken': CONFIG.get(
+                        'store_credential',
+                        self.storeConnect.get('direct_token', None)
+                    ),
                 }
             )
         else:
@@ -305,6 +337,8 @@ class ZabbixCloneConfig():
         self.mfaClientSecret = CONFIG.get('mfa_client_secret', {})
         # テンプレートのスキップ
         self.templateSkip = True if CONFIG.get('template_skip', 'NO') == 'YES' else False
+        if self.forceInitialize:
+            self.templateSkip = False
         # テンプレートのエクスポート時の区切り数
         self.templateSeparate = CONFIG.get('template_separate', ZC_TEMPLATE_SEPARATE)
 
@@ -316,12 +350,13 @@ class ZabbixCloneConfig():
         '''
         self.directMaster = True
         self.role = 'master'
-        self.node = self.storeConnect.get('directNode', None)
-        self.endpoint = self.storeConnect.get('directEndpoint', 'http://zc-master.local')
-        self.token = self.storeConnect.get('directToken', None)
+        self.node = self.storeConnect.get('directNode')
+        self.endpoint = self.storeConnect.get('directEndpoint')
+        self.token = self.storeConnect.get('directToken')
         self.auth = []
         self.httpAuth = False
         self.updatePassword = False
+        self.templateSkip = False
         return ZC_COMPLETE
 
     def showParameters(self):
@@ -372,7 +407,7 @@ class ZabbixCloneConfig():
         elif self.storeType == 'redis':
             storeType = 'Redis'
         elif self.storeType == 'direct':
-            storeType == 'Master-Node Zabbix Direct Connect'
+            storeType = 'Master-Node Zabbix Direct Connect'
         elif self.storeType == 'file':
             storeType = 'Local File'
         else:
@@ -441,29 +476,6 @@ class ZabbixCloneParameter():
     '''
     ZabbixAPIのパラメータのバージョン間差異を吸収するクラス
     '''
-
-    # メソッドget実行のためのパラメータ
-    methodParameters = {}
-
-    # Configurationでの変換処理実行するなどの区分
-    sections = {}
-
-    # Configuration.importルール
-    importRules = {}
-
-    # メジャーバージョンアップで追加されたメソッド、下位バージョンはこれみてスキップする
-    addMethods = {}
-
-    # DB直接操作、削除されたカラム
-    dbConfigDropCols = {}
-
-    # DB直接操作、configテーブルのカラム名変更
-    dbConfigRenameCols = {}
-
-    # ID->Method変換
-    idMethod = {}
-
-    discardProperty = {}
 
     def __init__(self, version):
         version = version if version else {'major': ZC_DEFAULT_ZABBIX_VERSION, 'minor': 0}
@@ -1066,17 +1078,27 @@ class ZabbixCloneParameter():
                 'browser'
             ]
 
-        # クラス変数に代入
+
+        # クラス変数化
+        # メソッドget実行のためのパラメータ
         self.methodParameters = methodParameters
+        # Configurationでの変換処理実行するなどの区分
         self.sections = sections
+        # Configuration.importルール
         self.importRules = importRules
-        self.discardProperty = discardProperty
+        # メジャーバージョンアップで追加されたメソッド、下位バージョンはこれみてスキップする
         self.addMethods = addMethods
+        # DB直接操作、削除されたカラム
         self.dbConfigDropCols = dbConfigDropCols
+        # DB直接操作、configテーブルのカラム名変更
         self.dbConfigRenameCols = dbConfigRenameCols
+        # メソッド内で除去するプロパティ
+        self.discardProperty = discardProperty
+        # 7.0対応 アイテム取得のタイムアウト分離
         self.timeoutTarget = timeoutTarget
 
         # ID Name->Method変換テーブル生成
+        self.idMethod = {}
         for method, parameter in self.methodParameters.items():
             self.idMethod.update(
                 {
@@ -1935,20 +1957,19 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
     Zabbixのデータ複製操作クラス
     '''
 
-    # 設定（ZabbixCloneConfigインスタンス）
-    CONFIG = None
-    # pyzabbixインスタンス
-    ZAPI = None
-    # 生成した新バージョンデータ
-    NEW = {}
-    # ノード上のZabbixデータ{'METHOD': {'NAME': {}},{'NAME': {}}...} 名前で検索するのでこの形
-    LOCAL = {}
-    # Zabbix IDとZabbix Nameの変換テーブル
-    IDREPLACE = {}
-    # ノードのZabbixバージョン
-    VERSION = None
-
     def __init__(self, CONFIG):
+
+        # pyzabbixインスタンス
+        self.ZAPI = None
+        # 生成した新バージョンデータ
+        self.NEW = {}
+        # ノード上のZabbixデータ{'METHOD': {'NAME': {}},{'NAME': {}}...} 名前で検索するのでこの形
+        self.LOCAL = {}
+        # Zabbix IDとZabbix Nameの変換テーブル
+        self.IDREPLACE = {}
+        # ノードのZabbixバージョン
+        self.VERSION = None
+
         # 設定の適用
         if not isinstance(CONFIG, ZabbixCloneConfig):
             sys.exit('ZabbixClone, Bad Config.')
@@ -2178,33 +2199,40 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         ・必須ホストグループの確認、追加、名前変更
         ・プロキシの削除
         '''
+        result = ZC_COMPLETE
 
         # バージョン情報の取得
-        result = self.getVersionFromStore()
-        if not result[0]:
-            return result
-        if not self.VERSIONS:
-            # オンラインにデータがない
-            if self.checkMasterNode():
+        if self.CONFIG.storeType == 'direct':
+            # DirectMaster用バージョンの生成
+            self.VERSIONS = [
+                {
+                    'VERSION_ID': '__DIRECT_MASTER_%s__' % ZABBIX_TIME(),
+                    'TIMESTAMP': -1,
+                    'DESCRIPTION': ''
+                }
+            ]
+        else:
+            result = self.getVersionFromStore()
+            if result[0] and not self.VERSIONS and self.checkMasterNode():
                 # これから作るので仮バージョンを生成
                 self.VERSIONS = [
                     {
                         'VERSION_ID': '__FIRST_CREATE__',
                         'TIMESTAMP': -1,
-                        'MASTER_VERSION': self.VERSION['major']
+                        'MASTER_VERSION': self.VERSION['major'],
+                        'DESCRIPTION': ''
                     }
                 ]
             else:
                 # ワーカー側はストアのバージョンデータがないので実行不可
                 result = (False, 'Non Exist Onstore Version/Data.')
+
         if not result[0]:
             return result
 
         # ワーカーのZabbixバージョンがマスターのZabbixバージョンより古い場合は終了
         if not self.checkMasterNode and self.VERSION['major'] < self.getLatestVersion('MASTER_VERSION'):
             return (False, '%s zabbix version > Onstore Data zabbix version.' % self.CONFIG.node)
-
-        result = ZC_COMPLETE
 
         # データの初回取得
         result = self.getDataFromZabbix()
@@ -2259,7 +2287,6 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         # 適用実行
                         self.ZAPI.host.update(**option)
                         result = ZC_COMPLETE
-                        print(0)
                     except Exception as e:
                         result = (False, 'Failed, firstProcess set host uuid-tag. %s' % e)
                         
@@ -2303,12 +2330,19 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             # 適用状態の確認
             nowVersion = self.LOCAL['usermacro'].get(ZC_VERSION_CODE, None) if not self.CONFIG.forceInitialize else None
             if nowVersion:
+                nowVersion = nowVersion['DATA']['value']
                 try:
                     # バージョン文字列がUUIDか確認
-                    uuid.UUID(nowVersion['DATA']['value'])
+                    uuid.UUID(nowVersion)
                 except:
-                    # バージョン文字列が不正なので初期化対象
-                    nowVersion = None
+                    if re.match('__DIRECT_MASTER_[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z__', nowVersion):
+                        # マスター直接適用なのでパス
+                        pass
+                    else:
+                        # バージョン文字列が不正なので初期化対象
+                        nowVersion = None
+                        # 初期化対象はテンプレートインポートスキップキャンセル
+                        self.CONFIG.templateSkip = False
             if nowVersion:
                 # ワーカーノードの設定削除否定フラグ
                 if not self.CONFIG.noDelete:
@@ -3809,41 +3843,48 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
 
         return ZC_COMPLETE
 
-    def getDataFromMaster(self):
+    def getDataFromMaster(self, master):
         '''
         ストア:Directのマスターノードからのデータ読み込み
         '''
-        # DirectMaster用バージョンの生成
-        self.VERSIONS = [
+        master.VERSIONS = self.VERSIONS
+        master.VERSIONS[0].update(
             {
-                'VERSION_ID': '__DIRECT_MASTER_%s__' % ZABBIX_TIME(),
-                'TIMESTAMP': -1,
-                'MASTER_VERSION': self.VERSION['major']
+                'MASTER_VERSION': master.VERSION['major'],
             }
-        ]
+        )
+
         # マスターノードからダイレクトにデータを取得する
-        if self.CONFIG.directMaster:
+        if master.CONFIG.directMaster:
             # 接続先のサーバー名確認
-            result = CHECK_ZABBIX_SERVER_NAME(self.CONFIG.endpoint, self.CONFIG.node)
+            result = CHECK_ZABBIX_SERVER_NAME(master.CONFIG.endpoint, master.CONFIG.node)
             if result[0]:
-                # マスター側の初回取得
-                result = self.getDataFromZabbix()
+                # マスター側の取得
+                result = getattr(master, 'getDataFromZabbix')()
             if result[0]:
                 # マスター側のデータ取得
-                return self.createNewData()
-            # ここに来るのは失敗の時
+                result = getattr(master, 'createNewData')()
             return result
         else:
             return (False, 'Not Master-Node.')
 
-    def getDataFromStore(self):
+    def getDataFromStore(self, **params):
         '''
         データストアからデータを取得する
         version: 対象のバージョン、なければ最新
         '''
         # マスターノードからダイレクトにデータを取得する
-        if self.CONFIG.directMaster:
-            return (False, 'Cannot Execute DirectMaster.')
+        if params.get('master'):
+            master = params['master']
+            if not isinstance(master, ZabbixClone):
+                return (False, 'Not Master Instance.')
+            result = self.getDataFromMaster(master)
+            if result[0]:
+                self.STORE = master.STORE
+                self.VERSIONS = master.VERSIONS
+                return ZC_COMPLETE
+            else:
+                return result
         
         # ストアからの読み込みここから
         result = ZC_COMPLETE
@@ -4060,7 +4101,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         importTemplate = importData.copy()
         importTemplate.update(
             {
-                'triggers': [trigger['DATA'] for trigger in self.STORE['trigger']] 
+                'triggers': [trigger['DATA'] for trigger in self.STORE.get('trigger', [])] 
             }
         )
 
@@ -4231,6 +4272,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     print('X', end='', flush=True)
                 else:
                     # テンプレート以外の失敗は即終了
+                    print(e)
+                    print(importItems)
                     return (False, 'Failed Execute Import.')
                 
             # テンプレートの実行中の改行
@@ -5485,19 +5528,21 @@ def main():
     # コンフィグの読み込み
     config = ZabbixCloneConfig(**params)
     if command == 'clone':
-        # 表示（仮）
         node = ZabbixClone(config)
 
+        if config.storeType == 'direct':
+            masterConfig = ZabbixCloneConfig(**params)
+            masterConfig.changeDirectMaster()
+            master = ZabbixClone(masterConfig)
+
+        # 表示（仮）
         if not quiet:
             config.showParameters()
             print(f'\n[START] {ZABBIX_TIME()}')
 
-        if config.storeType == 'direct':
-            config.changeDirectMaster()
-            master = ZabbixClone(config)
         # 実行処理リスト
         functions = [
-            ['firstProcess', 'node', None]
+            ['firstProcess', None]
         ]
 
         if node.checkMasterNode():
@@ -5505,8 +5550,8 @@ def main():
             # 新バージョンデータの生成
             # データストアへのアップロード
             functions += [
-                ['createNewData',         'node', None],
-                ['setVersionDataToStore', 'node', None]
+                ['createNewData',         None],
+                ['setVersionDataToStore', None]
             ]
         else:
             # ワーカーノード処理
@@ -5525,59 +5570,49 @@ def main():
 
             # パスワード変更
             functions += [
-                ['changePassword', 'node', None]
+                ['changePassword', None]
             ]
 
             # Directモードの時はデータを直接マスターノードから読み込む
-            if config.directMaster:
-                functions += ['getDataFromMaster', 'master', None],
+            if config.storeType == 'direct':
+                functions += ['getDataFromStore', {'master': master}],
             else:
-                functions += ['getDataFromStore',  'node',   None],
+                functions += ['getDataFromStore', None],
             
             functions += [
-                ['setGlobalsettingsToZabbix', 'node', None],
-                ['setApiToZabbix',            'node', {'section': 'PRE'}],
-                ['setConfigurationToZabbix',  'node', None],
-                ['setAlertStopInUpdate',      'node', None],
-                ['setApiToZabbix',            'node', {'section': 'MID'}],
-                ['setHostToZabbix',           'node', None],
-                ['execCheckNow',              'node', None],
-                ['setApiToZabbix',            'node', {'section': 'POST'}],
-                ['setApiToZabbix',            'node', {'section': 'ACCOUNT'}],
-                ['setApiToZabbix',            'node', {'section': 'EXTEND'}],
-                ['setAuthenticationToZabbix', 'node', None],
-                ['setAlertMedia',             'node', None],
+                ['setGlobalsettingsToZabbix', None],
+                ['setApiToZabbix',            {'section': 'PRE'}],
+                ['setConfigurationToZabbix',  None],
+                ['setAlertStopInUpdate',      None],
+                ['setApiToZabbix',            {'section': 'MID'}],
+                ['setHostToZabbix',           None],
+                ['execCheckNow',              None],
+                ['setApiToZabbix',            {'section': 'POST'}],
+                ['setApiToZabbix',            {'section': 'ACCOUNT'}],
+                ['setApiToZabbix',            {'section': 'EXTEND'}],
+                ['setAuthenticationToZabbix', None],
+                ['setAlertMedia',             None],
             ]
 
         functions += [
             # 現在適用バージョンを記録
-            ['setVersionCode', 'node', None],
+            ['setVersionCode', None],
         ]
 
         for function in functions:
             func = function[0]
-            target = function[1]
-            option = function[2]
+            option = function[1]
             if not quiet:
-                if target == 'master':
-                    execute = f'master({config.endpoint}).{func}'
-                else:
-                    execute = f'{config.role}({config.node}).{func}'
+                execute = f'{config.role}({config.node}).{func}'
                 print(f'{TAB}{execute}', end=':', flush=True)
             try:
-                if target == 'master':
-                    if option:
-                        result = getattr(master, func)(**option)
-                    else:
-                        result = getattr(master, func)()
+                if option:
+                    result = getattr(node, func)(**option)
                 else:
-                    if option:
-                        result = getattr(node, func)(**option)
-                    else:
-                        result = getattr(node, func)()
+                    result = getattr(node, func)()
             except Exception as e:
                 print(f'{e}')
-                sys.exit('Execute Function Failed: [%s] ' % '/'.join(function[:2]))
+                sys.exit('Execute Function Failed: [%s] ' % '/'.join(function[:1]))
             if not quiet:
                 if isinstance(result[1], (dict, list, tuple)):
                     output = json.dumps(result[1], indent=TAB) + f'\n{ZC_COMPLETE[1]}'
@@ -5657,4 +5692,4 @@ def main():
 if __name__ == '__main__':
     main()
 
-#EOS``
+#EOS
