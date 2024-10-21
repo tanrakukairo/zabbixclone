@@ -287,6 +287,8 @@ class ZabbixCloneConfig():
         self.secretGlobalmacro = CONFIG.get('secret_globalmacro', [])
         # データ取り込みを有効にするユーザーとそのパスワード（ZabbixAPIでパスワードは取れないので）
         self.enableUser = CONFIG.get('enable_user', {})
+        # 特権管理者の複製を許可する
+        self.cloningSuerAdmin = True if CONFIG.get('cloning_super_admin', 'NO') == 'YES' else False
         # Proxy PSK情報（ZabbixAPIでpskは取れないので）
         self.proxyPsk = CONFIG.get('proxy_psk', {})
         # グローバル設定
@@ -3259,22 +3261,29 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         if not self.STORE.get('user'):
             return (True, 'No Data, user')
         
+        # 5.2対応
+        if self.VERSION['major'] >= 5.2:
+            # roleID変換
+            idName = self.getKeynameInMethod('role', 'id')
+            permit = idName
+        else:
+            permit = 'type'
         items = []
         deleteTarget = []
         try:
             for item in self.STORE['user'].copy():
                 data = item['DATA']
-                # 5.2対応
-                if self.VERSION['major'] >= 5.2:
-                    # roleID変換
-                    idName = self.getKeynameInMethod('role', 'id')
-                    data[idName] = self.replaceIdName('role', data[idName])
+                # 権限がtypeではない場合
+                if permit != 'type':
+                    data[idName] = self.replaceIdName(permit, data[idName])
                 # 不要項目削除
                 data.pop('users_status', None)
                 data.pop('gui_access', None)
                 data.pop('debug_mode', None)
                 # 7.0対応
-                data.pop('userdirectoryid', None)
+                if int(data.pop('userdirectoryid', 0)):
+                    # LDAP/SAML認証で生成されたユーザーは除外
+                    continue
                 # 所属Usergroup処理
                 if self.checkMasterNode():
                     # usrgrps:[]の中を{'name': 'xxxx'}のバリューだけにする
@@ -3285,6 +3294,10 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     name = data[self.getKeynameInMethod('user', 'name')]
                     if name not in self.CONFIG.enableUser:
                         continue
+                    # 特権管理者の複製許可確認
+                    if not self.CONFIG.cloningSuperAdmin:
+                        if data[permit] == ZABBIX_SUPER_ROLE:
+                            continue
                     # パスワード設定
                     data['passwd'] = self.CONFIG.enableUser[name]
                     # usrgrps:[]の中を{'usrgrpid': id}に変換する
@@ -3317,9 +3330,13 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         except Exception as e:
             return (False, 'processingUser: %s' % e)
         if not self.checkMasterNode():
+            name = self.getKeynameInMethod('user', 'name')
             # ワーカー側削除対象
             names = [item['NAME'] for item in self.STORE.get('user', [])]
             for name, item in self.LOCAL.get('user', {}).items():
+                if int(item['DATA'][name]) == ZABBIX_SUPER_USER:
+                    # Adminはスキップ
+                    continue
                 if name not in names:
                     deleteTarget.append(item['ZABBIX_ID'])
         self.STORE['user'] = items
