@@ -289,7 +289,7 @@ class ZabbixCloneConfig():
         # データ取り込みを有効にするユーザーとそのパスワード（ZabbixAPIでパスワードは取れないので）
         self.enableUser = CONFIG.get('enable_user', {})
         # 特権管理者の複製を許可する
-        self.cloningSuerAdmin = True if CONFIG.get('cloning_super_admin', 'NO') == 'YES' else False
+        self.cloningSuperAdmin = True if CONFIG.get('cloning_super_admin', 'NO') == 'YES' else False
         # Proxy PSK情報（ZabbixAPIでpskは取れないので）
         self.proxyPsk = CONFIG.get('proxy_psk', {})
         # グローバル設定
@@ -633,8 +633,8 @@ class ZabbixCloneParameter():
             ],
             # アカウント関連の処理をするグループ（Method名）
             'ACCOUNT': [
-                'user',
                 'usergroup', 
+                'user',
             ],
             # 最後に実行される特別処理のグループ（Method名）
             'EXTEND': [],
@@ -799,7 +799,7 @@ class ZabbixCloneParameter():
             )
             # userの出力にroleidを追加
             methodParameters['user']['options']['output'].append('roleid')
-            sections['ACCOUNT'].append('role')
+            sections['POST'].append('role')
             # インポートルールtemplateScreens->templateDashboards
             importRules['templateDashboards'] = importRules.pop('templateScreens', {})
             # 不要になったカラム
@@ -971,7 +971,6 @@ class ZabbixCloneParameter():
             )
             # userでroleidとuserdirectoryidのどちらかが必要になったので追加
             methodParameters['user']['options']['output'].append('userdirectoryid')
-            # ACCOUNTの最後に実行（ACCOUNTはreversedしてから実行）
             sections['POST'].append('userdirectory')
             # DBダイレクト操作は6.0で無しになったけど、一応名前変更カラムの情報定義
             dbConfigRenameCols.update(
@@ -2236,7 +2235,11 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             # マスターノードの処理
             # ホストに管理UUIDタグをつける
             # ワーカーでアップデートするときにホストのユニーク情報として使う予定（ホスト名変更があるとZCではわからないので）
-            update = False
+            
+            # 表示（仮）
+            print(f'\n{TAB*2}Set Host UUID:', end='', flush=True)
+            count = 0
+
             for item in self.LOCAL['host'].values():
                 # ユニーク識別のタグが付いていないことを確認
                 if ZC_UNIQUE_TAG not in [tag['tag'] for tag in item['DATA']['tags']]:
@@ -2255,13 +2258,25 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     try:
                         # 適用実行
                         self.ZAPI.host.update(**option)
-                        update = True
+                        result = ZC_COMPLETE
+                        print(0)
                     except Exception as e:
                         result = (False, 'Failed, firstProcess set host uuid-tag. %s' % e)
-                        break
-            if update:
-                # 更新があったら再読み込みする
-                self.getDataFromZabbix()
+                        
+                    # 表示（仮）
+                    if count == WIDE_COUNT or count == 0:
+                        print(f'\n{TAB*3}', end='', flush=True)
+                        count = T_COUNT*3
+                    res = 'S' if result[0] else 'X'
+                    print(f'{res}', end='', flush=True)
+                    count += 1
+                
+            # 表示（仮）
+            if count:
+                print('')
+            else:
+                print(' Already set All Hosts.')
+
         else:
             # ワーカーノード側処理
             # 適用バージョンの確認
@@ -2297,6 +2312,10 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             if nowVersion:
                 # ワーカーノードの設定削除否定フラグ
                 if not self.CONFIG.noDelete:
+
+                    # 表示（仮）
+                    print(f'{TAB*2}Method Data Reset:', flush=True)
+
                     # 適用後も毎回リセットする対象
                     for method in ['correlation', 'drule', 'action', 'script', 'maintenance']:
                         api = getattr(self.ZAPI, method)
@@ -2308,9 +2327,21 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             except Exception as e:
                                 # 実行失敗で処理中止
                                 result = (False, 'Failed, firstProcess Delete %s, %s.' % (method, e))
-                                break
+
+                        # 表示（仮）
+                        res = 'Success' if result[0] else 'Failed'
+                        print(f'{TAB*3}{method}: {res}.')
+
+                        if not result[1]:
+                            break
+
             else:
                 # バージョン情報がないので初期化する
+                
+                # 表示（仮）
+                print(f'{TAB*2}Start Initialize:', flush=True)
+                print(f'{TAB*3}Method Data Clear:', flush=True)
+
                 # イニシャライズ対象のメソッド、グループは要素があると消せないので最後に消す
                 methods = ['usermacro', 'correlation', 'drule', 'mediatype', 'action', 'script', 'maintenance', 'host', 'proxy', 'template', 'hostgroup']
                 # 6.0対応
@@ -2346,10 +2377,25 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         except Exception as e:
                             # 実行失敗で処理中止
                             result = (False, 'Failed, firstProcess Default Delete %s, %s.' % (method, e))
-                            break
-                # バージョン情報の挿入
-                self.setVersionCode(init=True)
+                    
+                    # 表示（仮）
+                    res = 'Success' if result[0] else 'Failed'
+                    print(f'{TAB*4}{method}: {res}.')
+
+                    if not result[1]:
+                        break
+
+                if result[1]:
+                    # バージョン情報の挿入
+                    self.setVersionCode(init=True)
+                    # 表示（仮）
+                    print(f'{TAB*2}Set VersionCode Globalmacro.')
+
+        if result[1]:
             self.getDataFromZabbix()
+            # 表示（仮）
+            print(f'{TAB*2}Get Node Zabbix Data.')
+        
         return result
 
     def createNewVersion(self):
@@ -2559,11 +2605,6 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         if not self.sections.get(section):
             return (False, 'No section:%s in sections.' % section)
         methods = self.sections[section]
-        if section == 'ACCOUNT':
-            # ACCOUNTは逆順に実行する
-            methods = reversed(methods)
-        else:
-            pass
         for method in methods:
             function = 'processing' + method[0].upper() + method[1:]
             rWord = 'NoProcessing'
@@ -3265,8 +3306,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         # 5.2対応
         if self.VERSION['major'] >= 5.2:
             # roleID変換
-            idName = self.getKeynameInMethod('role', 'id')
-            permit = idName
+            permit = 'role'
+            permitId = self.getKeynameInMethod(permit, 'id')
         else:
             permit = 'type'
         items = []
@@ -3276,7 +3317,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 data = item['DATA']
                 # 権限がtypeではない場合
                 if permit != 'type':
-                    data[idName] = self.replaceIdName(permit, data[idName])
+                    data[permitId] = self.replaceIdName(permit, data[permitId])
                 # 不要項目削除
                 data.pop('users_status', None)
                 data.pop('gui_access', None)
@@ -3291,16 +3332,17 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     usrgrps = data.pop('usrgrps')
                     data['usrgrps'] = [grp.get('name') for grp in usrgrps]
                 else:
-                    # 移植許可ユーザーの確認
-                    name = data[self.getKeynameInMethod('user', 'name')]
-                    if name not in self.CONFIG.enableUser:
-                        continue
                     # 特権管理者の複製許可確認
                     if not self.CONFIG.cloningSuperAdmin:
-                        if data[permit] == ZABBIX_SUPER_ROLE:
+                        if data[permitId] == ZABBIX_SUPER_ROLE:
                             continue
+                    # 複製許可ユーザーの確認
+                    name = data[self.getKeynameInMethod('user', 'name')]
+                    password = self.CONFIG.enableUser.get(name)
+                    if not password:
+                        continue
                     # パスワード設定
-                    data['passwd'] = self.CONFIG.enableUser[name]
+                    data['passwd'] = password
                     # usrgrps:[]の中を{'usrgrpid': id}に変換する
                     idName = self.getKeynameInMethod('usergroup', 'id')
                     usrgrps = data.pop('usrgrps')
@@ -3324,21 +3366,22 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     else:
                         # ID変換できないメディアは削除
                         data['medias'].remove(media)
-                if not data['medias']:
-                    # 空の場合は項目を消す
-                    data.pop('medias')
+                    if not data['medias']:
+                        # 空の場合は項目を消す
+                        data.pop('medias', None)
+
                 items.append(item)
         except Exception as e:
             return (False, 'processingUser: %s' % e)
         if not self.checkMasterNode():
             name = self.getKeynameInMethod('user', 'name')
             # ワーカー側削除対象
-            names = [item['NAME'] for item in self.STORE.get('user', [])]
-            for name, item in self.LOCAL.get('user', {}).items():
-                if int(item['DATA'][name]) == ZABBIX_SUPER_USER:
+            users = [item['NAME'] for item in self.STORE.get('user', [])]
+            for user, item in self.LOCAL.get('user', {}).items():
+                if item['DATA'][name] == ZABBIX_SUPER_USER:
                     # Adminはスキップ
                     continue
-                if name not in names:
+                if user not in users:
                     deleteTarget.append(item['ZABBIX_ID'])
         self.STORE['user'] = items
         if deleteTarget:
@@ -4221,6 +4264,11 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             # 一般設定系は形式が違うのでここで実行できない
             return (False, 'Cannot Execute GLOBAL sections')
 
+        # セクション内に何もないか、そもそもセクションがない
+        if not self.sections.get(section):
+            return (True, f'{section} is Empty.')
+        sections = self.sections[section]
+
         # 表示（仮）
         print(f'\n{TAB*2}Method Data Convert in {section} section:', flush=True)
         
@@ -4233,15 +4281,11 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         for row in result[1]:
             print(row)
 
-        # セクション内に何もないか、そもそもセクションがない
-        if not self.sections.get(section):
-            return (True, f'{section} is Empty.')
-
         # セクションの適用
         # 表示（仮）
         print(f'\n{TAB*2}Execute API in {section} section:',end='', flush=True)
 
-        for method in self.sections[section]:
+        for method in sections:
             items = []
             api = getattr(self.ZAPI, method.removesuffix('Extend'))
             # データ操作
