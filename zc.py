@@ -153,8 +153,9 @@ class ZabbixCloneConfig():
         4.内容確認＆デフォルト処理
         '''
         # no_config_files: YESの場合は引数のみを使用
+        CONFIG = {}
         if params.get('no_config_files', 'NO') == 'YES':
-            CONFIG = {}
+            pass
         else:
             # 指定された設定ファイルまたはデフォルト設定ファイル
             self.configFile = params.get('config_file', os.path.join(ZABBIX_CONFIG_PATH, ZC_CONFIG))

@@ -392,7 +392,8 @@ zc.py showdata --version xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 
 ## 設定
 
-設定は、固定設定ファイルまたは指定されたファイルが読み込まれた後、コマンドパラメーターが適用されて決定します。
+設定は、固定の設定ファイルまたは指定されたファイルが読み込まれた後、コマンドパラメーターが適用されて決定します。<br>
+固定の設定ファイルはなくてもかまいません。
 
 設定のCOMMANDが有効なのは[clone](#clone)のみになります。
 
@@ -407,7 +408,7 @@ zc.py showdata --version xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 #### 設定ファイル不使用
     COMMAND: --no-config-files
 
-不使用を指定した場合、コマンド引数のみを使います。
+不使用を指定した場合、設定ファイルを読み込まずにコマンド引数のみを使います。
 
 ### 基本設定
 
