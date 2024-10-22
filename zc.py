@@ -268,14 +268,15 @@ class ZabbixCloneConfig():
         self.endpoint = CONFIG.get('endpoint', 'http://localhost')
         # ZabbixCloudフラグ
         # エンドポイントでZabbixCloudを判定する
-        self.zabbixCloud = True if re.match('https://([a-zA-Z0-1-]*).zabbix.cloud(/){0,1}', self.endpoint) else False
+        self.zabbixCloud = True if re.match('https://([a-z0-1-]*).zabbix.cloud(/){0,1}', self.endpoint) else False
+        if self.zabbixCloud:
+            self.platformPassword = CONFIG.get('platform_password', None)
         # 認証情報
         self.token = CONFIG.get('token', None)
         self.auth = [
             CONFIG.get('user', ZABBIX_DEFAULT_AUTH[0]),
             CONFIG.get('password', None)
         ]
-        self.defaultPassword = CONFIG.get('default_password', None)
         if self.role == 'worker':
             # 適用指定バージョン
             self.targetVersion = CONFIG.get('version', None)
@@ -288,6 +289,9 @@ class ZabbixCloneConfig():
             self.updatePassword =False
         # Bacis/Digit認証利用
         self.httpAuth = True if CONFIG.get('http_auth', 'NO') == 'YES' else False
+        if self.zabbixCloud:
+            # ZabbixCloud対応: HTTP AUTHは無効
+            self.httpAuth = False
         if self.httpAuth:
             # Basic/Digit認証利用ではアップデートできない
             self.updatePassword = False
@@ -380,7 +384,7 @@ class ZabbixCloneConfig():
         print(f'{TAB*2}Role: {self.role}')
         print(f'{TAB*2}Zabbix Endpoint: {self.endpoint}')
         if self.zabbixCloud:
-            print(f'{TAB*2}Zabbix Cloud Node: YES')
+            print(f'{TAB*2}ZabbixCloud Node: YES')
 
         # 認証関連
         if self.token:
@@ -2133,8 +2137,9 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
 
         # パスワード更新の場合はデフォルト認証を試行する
         if self.CONFIG.updatePassword and not token:
-            if self.CONFIG.defaultPassword:
-                auth = [ZABBIX_DEFAULT_AUTH[0], self.CONFIG.defaultPassword]
+            if self.CONFIG.platformPassword:
+                # ZabbixCloud対応: プラットフォームがAdminのデフォルトパスワード生成
+                auth = [ZABBIX_DEFAULT_AUTH[0], self.CONFIG.platformPassword]
             else:
                 auth = ZABBIX_DEFAULT_AUTH
             try:
@@ -2215,8 +2220,9 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         name = self.getKeynameInMethod('user', 'name')
         auth = auth if len(auth) > 2 else self.CONFIG.auth
         currentPasswd = auth[2] if len(auth) == 3 else ZABBIX_DEFAULT_AUTH[1]
-        if self.CONFIG.defaultPassword:
-            currentPasswd = self.CONFIG.defaultPassword
+        # ZabbixCloud対応: プラットフォーム生成のデフォルトパスワードを指定する
+        if self.CONFIG.platformPassword:
+            currentPasswd = self.CONFIG.platformPassword
 
         try:
             # 対象管理者の確認
@@ -2462,7 +2468,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         ids = []
                         for item in self.LOCAL[method].values():
                             if self.CONFIG.zabbixCloud and item['NAME'] in self.zabbixCloudSpecialItem.get(method, []):
-                                # Zabbix Cloud対応: mediatypeの'Cloud Mail'これ消せないので除外
+                                # ZabbixCloud対応: mediatypeの'Cloud Mail'消せないので除外
                                 continue
                             else:
                                 ids.append(item['ZABBIX_ID'])
@@ -4590,15 +4596,15 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             if self.VERSION['major'] >= 7.0:
                 # 7.0対応 プロキシグループとの区別が追加
                 monitorBy = {'DIRECT': 0, 'PROXY': 1, 'PROXY_GROUP': 2}
-                monitor = host.pop('monitored_by', None)
-                if monitor:
+                monitor = monitorBy.get(host.pop('monitored_by', None), 0)
+                if monitor > 0:
                     # proxyの種類と対象を決定
                     proxyType = monitor.lower()
                     proxy = host.pop(proxyType)['name']
                     # プロキシ情報を追加
                     host.update(
                         {
-                            'monitored_by': monitorBy[monitor],
+                            'monitored_by': monitor,
                             proxyType + 'id': self.replaceIdName(proxyType, proxy)
                         }
                     )
@@ -5249,7 +5255,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             id = self.replaceIdName('mfa', data['mfaid'])
             if id:
                 data['mfaid'] = id
-        # Zabbix Cloud対応: HTTP AUTH関連が存在しない
+        # ZabbixCloud対応: HTTP AUTH関連が存在しない
         if self.CONFIG.zabbixCloud:
             for property in self.zabbixCloudSpecialItem['authentication']:
                 data.pop(property, None)
