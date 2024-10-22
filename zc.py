@@ -275,9 +275,8 @@ class ZabbixCloneConfig():
         if self.role == 'worker':
             # 適用指定バージョン
             self.targetVersion = CONFIG.get('version', None)
-            if CONFIG.get('update_password', 'NO') == 'YES':
-                # ワーカーがデフォルトパスワードであれば管理者のパスワードを設定ファイル内のものに変更する
-                self.updatePassword = True
+            # ワーカーがデフォルトパスワードであれば管理者のパスワードを設定ファイル内のものに変更する
+            self.updatePassword = True if CONFIG.get('update_password', 'NO') == 'YES' else False
         else:
             # マスターでバージョン指定は不要
             self.targetVersion = None
@@ -407,7 +406,7 @@ class ZabbixCloneConfig():
         elif self.storeType == 'redis':
             storeType = 'Redis'
         elif self.storeType == 'direct':
-            storeType = 'Master-Node Zabbix Direct Connect'
+            storeType = 'Master-Node Zabbix Direct'
         elif self.storeType == 'file':
             storeType = 'Local File'
         else:
@@ -421,9 +420,9 @@ class ZabbixCloneConfig():
             ep = self.storeConnect['redis_host'] + ':' + str(self.storeConnect['redis_port'])
             print(f'{TAB*2}Redis Endpoint: {ep}')
         elif self.storeType == 'direct':
-            ep = self.storeConnect['direct_node']
+            node = self.storeConnect['direct_node']
             ep = self.storeConnect['direct_endpoint']
-            print(f'{TAB*2}Master-Node Endpoint: {ep}')
+            print(f'{TAB*2}Master-Node: {node} ({ep})')
         elif self.storeType == 'extend':
             for name, item in self.storeConnect:
                 print(f'{TAB*2}Extend Store Parameter {name}: {item}')
@@ -2070,7 +2069,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 API.login(api_token=token)
                 # トークンで認証したのでパスワード認証しない
                 auth = None
-            except:
+            except Exception as e:
                 # 認証できなかったトークンは消す
                 token = None
 
@@ -2080,7 +2079,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 API.login(*auth)
                 # 変更後のパスワードで認証できたので更新しない
                 self.CONFIG.updatePassword = False
-            except:
+            except Exception as e:
                 if self.CONFIG.updatePassword:
                     pass
                 else:
@@ -3069,6 +3068,28 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         if deleteTarget:
             self.STORE['proxyExtend'] = [{'delete': deleteTarget}]
             self.sections['EXTEND'].append('proxyExtend')
+        return result
+
+    def processingProxygroup(self):
+        '''
+        proxygroupのデータ加工
+        プロキシグループの削除のみ
+        '''
+        result = ZC_COMPLETE
+        if not self.STORE.get('proxygroup'):
+            return (True, 'No Data, proxygroup.')
+
+        deleteTarget = []
+        # 削除対象がある場合
+        if not self.checkMasterNode():
+            # ワーカー側削除対象
+            names = [item['NAME'] for item in self.STORE.get('proxygroup', [])]
+            for name, item in self.LOCAL.get('proxygroup', {}).items():
+                if name not in names:
+                    deleteTarget.append(item['ZABBIX_ID'])
+        if deleteTarget:
+            self.STORE['proxygroupExtend'] = [{'delete': deleteTarget}]
+            self.sections['EXTEND'].append('proxygroupExtend')
         return result
 
     def processingDrule(self):
@@ -4315,6 +4336,12 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         # 表示（仮）
         print(f'\n{TAB*2}Method Data Convert in {section} section:', flush=True)
         
+        # EXTENDで削除する場合、適用の逆順でないといけない場合があるのでリバース
+        # 適用: プロキシグループ -> プロキシ（プロキシグループのExtendが先にリストに入る）
+        # 削除: プロキシ -> プロキシグループ（逆順にすることでプロキシが先に削除される）
+        if section == 'EXTEND':
+            sections = reversed(sections)
+
         # データの変換処理
         result = self.processingMethodData(section)
         if not result[0]:
