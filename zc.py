@@ -211,11 +211,11 @@ class ZabbixCloneConfig():
                     ),
                     'dydbLimit': CONFIG.get(
                         'store_limit',
-                        self.storeConnect.get('dydb_limit', 100)
+                        self.storeConnect.get('dydb_limit', 10)
                     ),
                     'dydbWait': CONFIG.get(
                         'store_interval',
-                        self.storeConnect.get('dydb_wait', 1)
+                        self.storeConnect.get('dydb_wait', 2)
                     ),
                 }
             )
@@ -266,12 +266,16 @@ class ZabbixCloneConfig():
         self.role = CONFIG.get('role', ZC_DERAULT_ROLE)
         # Zabbixエンドポイント
         self.endpoint = CONFIG.get('endpoint', 'http://localhost')
+        # ZabbixCloudフラグ
+        # エンドポイントでZabbixCloudを判定する
+        self.zabbixCloud = True if re.match('https://([a-zA-Z0-1-]*).zabbix.cloud(/){0,1}', self.endpoint) else False
         # 認証情報
         self.token = CONFIG.get('token', None)
         self.auth = [
             CONFIG.get('user', ZABBIX_DEFAULT_AUTH[0]),
             CONFIG.get('password', None)
         ]
+        self.defaultPassword = CONFIG.get('default_password', None)
         if self.role == 'worker':
             # 適用指定バージョン
             self.targetVersion = CONFIG.get('version', None)
@@ -365,13 +369,20 @@ class ZabbixCloneConfig():
         '''
         print('[Zabbix Cloning Configurations]')
             
+        # 設定ファイル関連
         if self.configFile:
             print(f'{TAB}Config File: {self.configFile}')
         else:
             print(f'{TAB}No Config Files Mode: YES')
+
+        # ノード関連
         print(f'{TAB}Target Node: {self.node}')
         print(f'{TAB*2}Role: {self.role}')
         print(f'{TAB*2}Zabbix Endpoint: {self.endpoint}')
+        if self.zabbixCloud:
+            print(f'{TAB*2}Zabbix Cloud Node: YES')
+
+        # 認証関連
         if self.token:
             print(f'{TAB}Authentication Method: TOKEN')
         else:
@@ -383,6 +394,8 @@ class ZabbixCloneConfig():
             print(f'{TAB}HTTP Basic/Digit Authentication Mode: YES')
         if self.selfCert:
             print(f'{TAB}Self Certification Use: YES')
+
+        # 動作設定関連
         if self.forceInitialize:
             print(f'{TAB}Force Initialize with Worker: YES')
         if self.forceHostUpdate:
@@ -401,6 +414,8 @@ class ZabbixCloneConfig():
             print(f'{TAB}Configuration Export Separate Count: {self.templateSeparate}')
         if self.phpWorkerNum != PHP_WORKER_NUM:
             print(f'{TAB}Number of Parallel Excution Create/Update Hosts: {self.phpWorkerNum}') 
+
+        # ストア関連
         if self.storeType == 'dydb':
             storeType = 'AWS DynamoDB'
         elif self.storeType == 'redis':
@@ -428,6 +443,8 @@ class ZabbixCloneConfig():
                 print(f'{TAB*2}Extend Store Parameter {name}: {item}')
         else:
             pass
+
+        # DB関連
         if self.dbConnect:
             print(f'{TAB}Custom DB Connection: ')
             for param in ['host', 'name', 'port', 'user', 'password']:
@@ -437,12 +454,16 @@ class ZabbixCloneConfig():
                     else:
                         item = self.dbConnect[param]
                     print(f'{TAB*2}DB{param.capitalize()}: {item}')
+
+        # 暗号化関連
         if self.secretGlobalmacro:
             macros = ', '.join([macro['macro'] for macro in self.secretGlobalmacro])
             print(f'{TAB}Set Secret GlobalMacro: {macros}')
         if self.proxyPsk:
             proxies = ', '.join(self.proxyPsk.keys())
             print(f'{TAB}Set Proxy PSK: {proxies}')
+
+        # グローバル設定関連
         if self.settings:
             print(f'{TAB}Set Custom Global Settings:')
             origin = {"1":'Information', "2":'Warning', "3":'Average', "4":'High', "5":'Disaster'}
@@ -468,7 +489,7 @@ class ZabbixCloneConfig():
                     print(f'{TAB}MediaType[{media}] Set User(s): {users}')
         if self.mfaClientSecret:
             mfa = ', '.join(self.mfaClientSecret.keys())
-            print(f'MFA Client Secret (MFA Setting Requierd): {mfa}')
+            print(f'{TAB}MFA Client Secret (MFA Setting Requierd): {mfa}')
         return
 
 class ZabbixCloneParameter():
@@ -536,7 +557,6 @@ class ZabbixCloneParameter():
                 'name': 'description', 
                 'options': {
                     'output': 'extend',
-                    'filter': {'status': 0} # 有効なメディアのみ
                 },
             },
             'action': {
@@ -745,6 +765,24 @@ class ZabbixCloneParameter():
 
         # 7.0新機能 個別のタイムアウト設定
         timeoutTarget = []
+
+        # 7.0以降対応
+        # ZabbixCloudで対応が必要な要素
+        zabbixCloudSpecialItem = {
+            'mediatype': [
+                'Cloud Email'
+            ],
+            'role': [
+                'modules',
+                'modules.default_access'
+            ],
+            'authentication': [
+                'http_auth_enabled',
+                'http_login_form',
+                'http_strip_domains',
+                'http_case_sensitive'
+            ]
+        }
 
         # 4.4対応
         addMethods[4.4] = ['autoregistration']
@@ -1095,6 +1133,8 @@ class ZabbixCloneParameter():
         self.discardProperty = discardProperty
         # 7.0対応 アイテム取得のタイムアウト分離
         self.timeoutTarget = timeoutTarget
+        # 7.0以降 ZabbixCloudで対応が必要な要素
+        self.zabbixCloudSpecialItem = zabbixCloudSpecialItem
 
         # ID Name->Method変換テーブル生成
         self.idMethod = {}
@@ -1176,8 +1216,8 @@ class ZabbixCloneDatastore():
     # 追加ストア指定
     extendStore = None
     # DynamoDBの負荷調整パラメータ
-    dydbLimit = 100
-    dydbWait = 1
+    dydbLimit = 10
+    dydbWait = 2
 
     # エラーメッセージ関連
     MSG_NON_SUPPORT      = '%s: Non Supprt Datastore, %s.'
@@ -1548,7 +1588,8 @@ class ZabbixCloneDatastore():
                     {
                         'VERSION_ID': dl['VERSION_ID'],
                         'UNIXTIME': self.dydbNum(dl['UNIXTIME']),
-                        'MASTER_VERSION': self.dydbNum(dl['MASTER_VERSION'])
+                        'MASTER_VERSION': self.dydbNum(dl['MASTER_VERSION']),
+                        'DESCRIPTION': dl['DESCRIPTION']
                     }
                 )
             result = (True, versions)
@@ -1657,7 +1698,7 @@ class ZabbixCloneDatastore():
         返値: (boolean, message)
         '''
         result = ZC_COMPLETE
-        version = params.get('data')
+        version = params.get('version')
         if not version:
             return (False, 'No Exist VERSION data')
         client = params.get('client')
@@ -1832,7 +1873,7 @@ class ZabbixCloneDatastore():
             return (False, '%s: %s' % (self.storeType, result[1]))
         return result
 
-    def setDataToStoreDyDB(self, **params):
+    def setDataToStoreDydb(self, **params):
         '''
         DynamoDBにデータを追加する
         返値: (boolean, message)
@@ -2067,8 +2108,12 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         if token:
             try:
                 API.login(api_token=token)
-                # トークンで認証したのでパスワード認証しない
-                auth = None
+                if not self.CONFIG.updatePassword:
+                    # トークンで認証したのでパスワード認証しない
+                    auth = None
+                else:
+                    # パスワード変更するのでパスワード認証もする
+                    token = None
             except Exception as e:
                 # 認証できなかったトークンは消す
                 token = None
@@ -2088,8 +2133,12 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
 
         # パスワード更新の場合はデフォルト認証を試行する
         if self.CONFIG.updatePassword and not token:
+            if self.CONFIG.defaultPassword:
+                auth = [ZABBIX_DEFAULT_AUTH[0], self.CONFIG.defaultPassword]
+            else:
+                auth = ZABBIX_DEFAULT_AUTH
             try:
-                API.login(*ZABBIX_DEFAULT_AUTH)
+                API.login(*auth)
             except:
                 return (False, 'Cannot Autneticate for ChangePassword.')
 
@@ -2166,6 +2215,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         name = self.getKeynameInMethod('user', 'name')
         auth = auth if len(auth) > 2 else self.CONFIG.auth
         currentPasswd = auth[2] if len(auth) == 3 else ZABBIX_DEFAULT_AUTH[1]
+        if self.CONFIG.defaultPassword:
+            currentPasswd = self.CONFIG.defaultPassword
 
         try:
             # 対象管理者の確認
@@ -2184,8 +2235,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 self.ZAPI.user.update(**change)
                 # 変更したパスワードで再認証
                 self.ZAPI.login(*auth)
-        except:
-            result = (False, 'Failed Update Password for %s.' % auth[0])
+        except Exception as e:
+            result = (False, 'Failed Update Password for %s. %s' % (auth[0], e))
 
         return result
 
@@ -2212,19 +2263,26 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             ]
         else:
             result = self.getVersionFromStore()
-            if result[0] and not self.VERSIONS and self.checkMasterNode():
-                # これから作るので仮バージョンを生成
-                self.VERSIONS = [
-                    {
-                        'VERSION_ID': '__FIRST_CREATE__',
-                        'TIMESTAMP': -1,
-                        'MASTER_VERSION': self.VERSION['major'],
-                        'DESCRIPTION': ''
-                    }
-                ]
+            if result[0]:
+                if not self.VERSIONS:
+                    if self.checkMasterNode():
+                        # これから作るので仮バージョンを生成
+                        self.VERSIONS = [
+                            {
+                                'VERSION_ID': '__FIRST_CREATE__',
+                                'TIMESTAMP': -1,
+                                'MASTER_VERSION': self.VERSION['major'],
+                                'DESCRIPTION': ''
+                            }
+                        ]
+                    else:
+                        # ワーカー側はストアのバージョンデータがないので実行不可
+                        result = (False, 'No Exist On-Store Versions.')
+                else:
+                    pass
             else:
-                # ワーカー側はストアのバージョンデータがないので実行不可
-                result = (False, 'Non Exist Onstore Version/Data.')
+                # 取得失敗
+                result = (False, 'Failed Get Versions.')
 
         if not result[0]:
             return result
@@ -2401,10 +2459,16 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         # systemGroupは削除不能（実行するとエラー）なので外す
                         ids = [item['ZABBIX_ID'] for item in self.LOCAL[method].values() if item['ZABBIX_ID'] != int(systemGroup)]
                     else:
-                        ids = [item['ZABBIX_ID'] for item in self.LOCAL[method].values()]
+                        ids = []
+                        for item in self.LOCAL[method].values():
+                            if self.CONFIG.zabbixCloud and item['NAME'] in self.zabbixCloudSpecialItem.get(method, []):
+                                # Zabbix Cloud対応: mediatypeの'Cloud Mail'これ消せないので除外
+                                continue
+                            else:
+                                ids.append(item['ZABBIX_ID'])
                     if method == 'usermacro':
                         function += 'global'
-                    if ids:
+                    if ids != []:
                         try:
                             getattr(api, function)(*ids)
                         except Exception as e:
@@ -2577,7 +2641,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         if not method or not target:
             # パラメータなし
             return None
-        if not self.IDREPLACE.get(method):
+        if self.IDREPLACE.get(method, None) is None:
             # メソッドが存在しない
             return None
         try:
@@ -2812,21 +2876,25 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                                         continue
                                     ope.update({key: trans})
                             elif isinstance(ope, list):
-                                for row in ope.copy():
-                                    for key, value in row.copy().items():
+                                rows = []
+                                for row in ope:
+                                    for key, value in row.items():
                                         # 削除対象IDの処理
                                         if key in readOnly:
-                                            row.pop(key)
+                                            continue
                                         method = self.getMethodFromIdname(key)
-                                        if method:
-                                            row.update(
-                                                {
-                                                    key: self.replaceIdName(method, value)
-                                                }
-                                            )
+                                        value = self.replaceIdName(method, value)
+                                        if value is None:
+                                            continue
+                                    rows.append({key: value})
+                                ope = rows
                             else:
                                 # dictでもlistでもないのは変換の必要がない
                                 pass
+                            if not ope:
+                                # 空になったものは捨てる
+                                operate.pop(opKey, None)
+                            operate.update({opKey: ope})
                 items.append(item)
         except Exception as e:
             result = (False, 'processingAction: %s' % e)
@@ -3126,7 +3194,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     idName = 'proxy_hostid'
                 id = self.replaceIdName('proxy', data[idName])
                 if id is None:
-                    self.STORE['drule'].pop(item)
+                    # 対応するプロキシーがなければ除外する
                     continue
                 if idRename:
                     data[idRename] = id
@@ -3396,8 +3464,9 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     password = self.CONFIG.enableUser.get(name)
                     if not password:
                         continue
-                    # パスワード設定
-                    data['passwd'] = password
+                    # パスワード設定を新規作成ユーザーに追加、既存ユーザーはパスワード変更はできない（元がわからない）
+                    if item['NAME'] not in self.LOCAL['user'].keys():
+                        data['passwd'] = password
                     # usrgrps:[]の中を{'usrgrpid': id}に変換する
                     idName = self.getKeynameInMethod('usergroup', 'id')
                     usrgrps = data.pop('usrgrps')
@@ -3564,6 +3633,12 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             for item in self.STORE['role'].copy():
                 # 不要項目を削除
                 item['DATA'].pop('readonly', None)
+                if not self.checkMasterNode():
+                    # ワーカーノード側
+                    if self.CONFIG.zabbixCloud:
+                        # ZabbixCloud対応: Module関連が存在しない
+                        for property in self.zabbixCloudSpecialItem['role']:
+                            item['DATA']['rules'].pop(property, None)
                 items.append(item)
         except Exception as e:
             return (False, 'processingRole: %s' % e)
@@ -4683,10 +4758,10 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         print(f'\n{TAB*3}Create: {create} / Update: {update}', end='', flush=True)
 
         if failed:
-            print(f'Failed: {len(failed)}')
+            print(f' / Failed: {len(failed)}')
             print(f'{TAB*3}Failed Hosts:', end='', flush=True)
             for item in failed:
-                print(f'{TAB*4}{item[2]}: {item[3]}')
+                print(f'\n{TAB*4}{item[2]}: {item[3]}')
         else:
             print('')
 
@@ -5174,6 +5249,10 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             id = self.replaceIdName('mfa', data['mfaid'])
             if id:
                 data['mfaid'] = id
+        # Zabbix Cloud対応: HTTP AUTH関連が存在しない
+        if self.CONFIG.zabbixCloud:
+            for property in self.zabbixCloudSpecialItem['authentication']:
+                data.pop(property, None)
         try:
             self.ZAPI.authentication.update(**data)
         except Exception as e:
@@ -5485,12 +5564,12 @@ def inputParameters():
     storeGroup.add_argument(
         '-sl', '--store-limit',
         type=int,
-        help='ストアの処理分離数、dydb(default: 100)'
+        help='ストアの処理分離数、dydb(default: 10)'
     )
     storeGroup.add_argument(
         '-sw', '--store-interval',
         type=int,
-        help='ストアの処理分離時のインターバル秒数、dydb(default: 1)'
+        help='ストアの処理分離時のインターバル秒数、dydb(default: 2)'
     )
     '''
     storeGroup.add_argument(
@@ -5549,8 +5628,6 @@ def main():
     # 進捗の表示
     if command != 'clone':
         quiet = True
-        if params.get('store_type', 'file') == 'file':
-            params['no_config_files'] = 'YES'
     else:
         quiet = params.pop('quiet', False)
     # clone以外の動作: ターゲットのものだけ表示する
@@ -5673,15 +5750,27 @@ def main():
             # DATA取得実行
             if config.directMaster:
                 result = node.getDataFromMaster()
+                store = node.STORE
+                if not result[0]:
+                    sys.exit(result[1])
             else:
                 if not params.get('version'):
                     sys.exit(f'{command} Required --version.')
                 result = node.getVersionFromStore(params['version'])
+                target = result[1][0]
                 if not result[0]:
                     sys.exit(result[1])
-                result = node.getDataFromStore(result[1][0])
-            if not result[0]:
-                sys.exit(result[1])
+                result = node.getDataFromStore(target)
+                if not result[0]:
+                    sys.exit(result[1])
+                if isinstance(result[1], list):
+                    store = {}
+                    for item in result[1]:
+                        if not store.get(method):
+                            store[method] = []
+                        store[method].append(item)
+                else:
+                    store = node.STORE
         if command == 'showversions':
             if config.directMaster:
                 print('DirectMode Connot Execute showversions.')
@@ -5698,7 +5787,7 @@ def main():
                     print(f'{TAB}' + output.replace('\n', f'\n{TAB}'))
                     print(f'{TAB}{BD}')
         elif command == 'showdata':
-            for method, items in node.STORE.items():
+            for method, items in store.items():
                 if not targetMethod or method in targetMethod:
                     print(f'{method}:{B_CHAR*(WIDE_COUNT-len(method)-1)}')
                     items = sorted(items, key=lambda x:x['NAME'])
