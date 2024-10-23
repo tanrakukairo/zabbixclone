@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+'''
+Zabbix Clone: Zabbix monitoring settings cloning tool, from master-Zabbix to worker-Zabbix.
+
+Copyright (c) 2024 tsuno teppei
+Released under the MIT license
+https://opensource.org/licenses/mit-license.php
+'''
+__author__ = 'tsuno.teppei'
+__version__ = '0.1.0'
+__date__ = '2024/10/23'
 
 import os
 import sys
@@ -35,6 +45,10 @@ ZABBIX_SUPER_USER = 'Admin'
 ZABBIX_SUPER_GROUP = 'Zabbix administrators'
 ZABBIX_SUPER_ROLE = 3
 ZABBIX_WEEKDAY = {'MON': 1, 'TUE': 2, 'WED': 3, 'THU': 4, 'FRI': 5, 'SAT': 6, 'SUN': 7}
+ZABBIX_INVENTORY_MODE = {'DISABLED': -1, 'MANUAL': 0, 'AOTOMATIC': 1}
+ZABBIX_IFTYPE = {'AGENT': 1, 'SNMP': 2, 'IPMI': 3, 'JMX': 4, 1: 'AGENT', 2: 'SNMP', 3: 'IPMI', 4: 'JMX'}
+ZABBIX_SNMP_VERSION = {'SNMPV1': 1, 'SNMPV2': 2, 'SNMPV3': 3}
+ZABBIX_PROXY_MODE = {'direct': 0, 'proxy': 1, 'proxy_group': 2}
 
 # 並行処理同時実行数のデフォルト値
 PHP_WORKER_NUM = 4
@@ -4520,14 +4534,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         あとバージョン上がってデータ形式が変更すると下位バージョンのインポートファイルで
         エラーになる場合が多いのでデータ形式をここで変換する（キー名変わる可能性もあるしね）
         '''
-        # インベントリ―モードの値変換
-        inventoryMode = {'DISABLED': -1, 'MANUAL': 0, 'AOTOMATIC': 1}
-        # インターフェイス種類の値変換
-        ifTypes = {'AGENT': 1, 'SNMP': 2, 'IPMI': 3, 'JMX': 4}
         # Yes/Noの値変換
         Y_N = {'NO': 0, 'YES': 1}
-        # SNMPバージョンの値
-        snmpVersion = {'SNMPV1': 1, 'SNMPV2': 2, 'SNMPV3': 3}
         hosts = []
         for host in self.STORE['host']:
             name = host['NAME']
@@ -4550,7 +4558,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             # バリューなしのキーを削除:5.x系であったcreateの空データ無視がなくなった時の対応（だったかな）
             [data.pop(key, None) for key, value in data.copy().items() if not value]
             # インベントリモードの変換:MANUALの場合キーが存在しない
-            data['inventory_mode'] = inventoryMode.get(data['inventory_mode'], inventoryMode['MANUAL'])
+            data['inventory_mode'] = ZABBIX_INVENTORY_MODE.get(data['inventory_mode'], ZABBIX_INVENTORY_MODE['MANUAL'])
             # インターフェイスの処理
             if len(data['interfaces']) == 1:
                 # インターフェイスが一つしかない場合はそれがメインインターフェイス
@@ -4564,7 +4572,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         'ip': hostIf.get('ip', '127.0.0.1'),
                         'main': Y_N[hostIf.pop('default', 'NO')],
                         'port': hostIf.get('port', '10050'),
-                        'type': ifTypes[ifType],
+                        'type': ZABBIX_IFTYPE[ifType],
                         'useip': 0 if hostIf.get('useip', 'YES') == 'NO' else 1,
                         'dns': hostIf.get('dns', ''),
                     }
@@ -4590,7 +4598,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         hostIf.update(
                             {
                                 'details': {
-                                    'version': snmpVersion[useVersion],
+                                    'version': ZABBIX_SNMP_VERSION[useVersion],
                                     'community': snmpCommunity
                                 }
                             }
@@ -4601,9 +4609,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             if self.VERSION['major'] >= 7.0:
                 # 7.0対応 プロキシグループとの区別が追加
                 # 各所で表記ブレブレなのどうにかしてよ……
-                monitorBy = {'direct': 0, 'proxy': 1, 'proxy_group': 2}
                 proxyType = data.pop('monitored_by', 'direct').lower()
-                monitor = monitorBy.get(proxyType, 0)
+                monitor = ZABBIX_PROXY_MODE.get(proxyType, 0)
                 if monitor > 0:
                     # proxyの種類と対象を決定
                     proxy = data.pop(proxyType)['name']
@@ -4777,8 +4784,6 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             print('')
 
         # インターフェイスのアップデート
-        # インターフェイス種類の値変換、キーバリュー入れ替え
-        ifTypes = {1: 'AGENT', 2: 'SNMP', 3: 'IPMI', 4: 'JMX'}
         deleteInterfaces = []
         # 表示（仮）
         display = []
@@ -4848,7 +4853,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         targetIf.pop('details')
 
                     # 表示（仮）
-                    disp += ifTypes[updateIf['type']]
+                    disp += ZABBIX_IFTYPE[updateIf['type']]
                     if updateIf['main'] == 1:
                         disp += '(default)'
 
@@ -4891,7 +4896,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     # 削除対象の処理
                     deleteInterfaces.append(
                         {
-                            'name': '%s(%s)' % (hostName, ifTypes[int(hostIf['type'])]),
+                            'name': '%s(%s)' % (hostName, ZABBIX_IFTYPE[int(hostIf['type'])]),
                             'id': hostIf['interfaceid']
                         }
                     )
@@ -5437,7 +5442,7 @@ def inputParameters():
     parser = argparse.ArgumentParser(
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=textwrap.dedent('''\
-        Zabbix Clone: Zabbix monitoring settings cloning, from master-Zabbix to worker-Zabbix.
+        Zabbix Clone: Zabbix monitoring settings cloning tool, from master-Zabbix to worker-Zabbix.
         If you use datastore, can manage settings by versions.''')
     )
     parser.add_argument(
