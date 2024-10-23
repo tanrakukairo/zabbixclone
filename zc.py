@@ -4324,6 +4324,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 print('SKIP.')
             
             templateResult = {'success': 0, 'failed': 0, 'messages': []}
+        # 表示（仮）
+        dispRow = 1
         for importItems in importData:
             # テンプレート用処理
             if 'templates' in importItems.keys():
@@ -4382,9 +4384,10 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 
             # テンプレートの実行中の改行
             # 表示（仮）
-            dispCount = T_COUNT*3 + templateResult['success'] + templateResult['failed']
-            if templateProcess and dispCount == WIDE_COUNT:
+            dispCount = T_COUNT*3*dispRow + templateResult['success'] + templateResult['failed']
+            if templateProcess and dispCount == WIDE_COUNT * dispRow:
                 print(f'\n{TAB*3}', end='', flush=True)
+                dispRow += 1
 
         # テンプレートインポートの結果
         # 表示（仮）
@@ -5772,6 +5775,7 @@ def main():
             print(f'\n{TAB*2}' + output.replace('\n', f'\n{TAB*2}') + '\n')
         print(f'\n[END] {ZABBIX_TIME()}')
     else:
+        # これ以下の実装、全部仮
         # clone以外の動作
         # ノードを初期化
         # VERSIONの取得
@@ -5804,6 +5808,7 @@ def main():
                 if isinstance(result[1], list):
                     store = {}
                     for item in result[1]:
+                        method = item['METHOD']
                         if not store.get(method):
                             store[method] = []
                         store[method].append(item)
