@@ -5151,7 +5151,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         # Zabbixからのデータ再取得
         self.getDataFromZabbix()
 
-        print(f'\n{TAB*2}AlertStop Period: from NOW to {period}s after.')
+        print(f'\n{TAB*2}AlertStop Period: from NOW to {period}s after.', end='', flush=True)
 
         return ZC_COMPLETE
 
