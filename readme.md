@@ -78,14 +78,18 @@
 
 (Will be translated into English.)
 
-Zabbixの監視設定をAPIを使って設定元のZabbixから、監視を実行するZabbixに複製するツールです。完全なバックアップではありません。
+Zabbixの監視設定をAPIを使って設定元のZabbixから、監視を実行するZabbixに複製するツールです。完全なバックアップではありません。<br>
+また設定元のZabbixに次の２つの設定追加を自動で実施します。
+
+* グローバルマクロに「{$ZC_VERSION}」というマクロを追加する
+* 全ホストに「ZC_UUID」というUUID情報を追加する
 
 とりあえず7.0->7.0で動くようになったので公開します。
 
 ## 動作環境
 Pythonが動作するOSなら多分どれでも。
 
-動作確認はWindows11pro、CentOS7で実行しています。
+動作確認はWindows11pro、alpine latestコンテナ内で実行しています。
 
 ## ソフトウェア要件
 
@@ -175,7 +179,7 @@ zc.py --help
     "http_auth": "YES|NO default:NO",
     "self_cert": "YES|NO default:NO",
     "checknow_execute": "YES|NO default:NO",
-    "store_type": "file|redis|dydb|direct,
+    "store_type": "file|redis|dydb|direct",
     "store_connect": {
         "aws_access_id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
         "aws_secret_key": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
@@ -829,13 +833,13 @@ MySQL系、PostgreSQL系のみの対応になります。ポート番号の指�
 *1: ZabbixCloudが7.0の間のみ
 
 ## 注意事項
-ただのメモ書き
 
 2024/10月現在
 * super admin roleでの実行、Adminを想定
 * usergroupの「Zabbix administrators」の名前は変更してはいけない
-* 5.4で書式変換が必要になるけど、そのあたりまだテストしてない（configuration.importが処理してくれる？）
-* Zabbixのバージョンはマスターノード≦ワーカーノードで動作
+* マスターノードの初回実行で全ホストに「ZC_UUID」のタグが付与される<br>
+またグローバルマクロに「{$ZC_VERSION}」が自動追加される<br>
+マスターノードに行う加工はこの２つだけだが、一切の変更をしないというツールではない
 * バックアップ機能ではないので、自動登録されたものは複製できない<br>
 自動登録（LLD、ディスカバリ、自動登録アクション）のホスト／アイテム／トリガーはワーカーノードでそれぞれ実行されて登録される
 * 監視設定はテンプレートのみ（configuration.export/importを利用）<br>
@@ -847,10 +851,11 @@ MySQL系、PostgreSQL系のみの対応になります。ポート番号の指�
 configuration.importの項目チェック機能が厳密化実装以降わりとバグるのでホストの処理にまでその対応を入れたくない<br>
 不要になった項目吐いてるのに食わせるとエラーになるとか
 * トリガーアクションでトリガー指定は複製できない（複製の指定（ホスト＆トリガー、自動登録も考慮）が非常に面倒なので）
-* Zabbix5.4より前はトークンのシステムがないが、セッションIDが同じものとして使える
 * ワーカーノードでは「イベント相関関係」「ネットワークディスカバリ」「アクション」「スクリプト」「メンテナンス」は必ず消去しあとで追加を行う<br>
 これはホストやホストグループなど多種要素により、要不要判定しにくいため<br>
 no_deleteで消さないようにしてるけど、他の消すところも消えなくなる
+* Zabbix5.4でトリガーの書式変換が必要になるが、そのあたりまだテストしてない（configuration.importが処理してくれる？）
+* Zabbix5.4より前はトークンのシステムがないが、セッションIDが同じものとして使える
 * 画面出力は全部仮実装、そのうちちゃんとloggerとかでログにも吐けるように実装しなおし予定
 * Zabbix Cloudに対応したものの、\<div class="server-name">ZABBIX_SERVER_NAME\</div>が「Zabbix」固定で大変困る<br>
 （ノードに割り当てるホストとプロキシの指定にここ使ってる）
