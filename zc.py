@@ -128,7 +128,7 @@ def CHECK_ZABBIX_SERVER_NAME(endpoint, name):
     res = res[0].removeprefix(prefix)
     res = res.removesuffix(suffix)
     if res != name:
-        return (False, 'Wrong Target Node.')
+        return (False, f'Wrong Target Node {name}.')
     return ZC_COMPLETE
 
 class ZabbixCloneConfig():
@@ -269,8 +269,7 @@ class ZabbixCloneConfig():
         # ZabbixCloudフラグ
         # エンドポイントでZabbixCloudを判定する
         self.zabbixCloud = True if re.match('https://([a-z0-1-]*).zabbix.cloud(/){0,1}', self.endpoint) else False
-        if self.zabbixCloud:
-            self.platformPassword = CONFIG.get('platform_password', None)
+        self.platformPassword = CONFIG.get('platform_password', None)
         # 認証情報
         self.token = CONFIG.get('token', None)
         self.auth = [
@@ -948,8 +947,6 @@ class ZabbixCloneParameter():
             sections['GLOBAL'].extend(['settings', 'authentication'])
             sections['PRE'].append('regexp')
             sections['POST'].extend(['service', 'sla'])
-            # serviceExtendはZabbixに存在しない、serviceの親子関係に利用するための仮想メソッド、POSTの後に実行する
-            sections['EXTEND'].append('serviceExtend')
             # グローバル設定と正規表現のAPI対応に伴うDBのダイレクト操作の廃止
             sections.pop('DB_DIRECT', None)
             discardProperty.update(
@@ -2117,7 +2114,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     auth = None
                 else:
                     # パスワード変更するのでパスワード認証もする
-                    token = None
+                    token = ''
             except Exception as e:
                 # 認証できなかったトークンは消す
                 token = None
@@ -2128,6 +2125,10 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 API.login(*auth)
                 # 変更後のパスワードで認証できたので更新しない
                 self.CONFIG.updatePassword = False
+                if token == '':
+                    # 一度はトークン認証通しているのでそちらで認証しなおし（トークン優先）
+                    token = self.CONFIG.token
+                    API.login(token)
             except Exception as e:
                 if self.CONFIG.updatePassword:
                     pass
@@ -2135,7 +2136,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     # 最終的に認証に失敗
                     return (False, 'Incorrect Credentials.')
 
-        # パスワード更新の場合はデフォルト認証を試行する
+        # パスワード更新の場合はトークン認証してない場合デフォルト認証を試行する
         if self.CONFIG.updatePassword and not token:
             if self.CONFIG.platformPassword:
                 # ZabbixCloud対応: プラットフォームがAdminのデフォルトパスワード生成
@@ -2497,7 +2498,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         if result[1]:
             self.getDataFromZabbix()
             # 表示（仮）
-            print(f'{TAB*2}Get Node Zabbix Data.')
+            print(f'{TAB*2}Get Node Zabbix Data.', end='', flush=True)
         
         return result
 
@@ -3329,6 +3330,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         if items:
             self.STORE['service'] = items
         if extend or deleteTarget:
+            self.sections['EXTEND'].append('serviceExtend')
             self.STORE['serviceExtend'] = []
         if extend:
             self.STORE['serviceExtend'].extend(extend)
@@ -4486,16 +4488,16 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         if self.CONFIG.noDelete:
                             continue
                         getattr(api, function)(item)
-                        CHAR = 'D'
+                        res = 'D'
                     else:
                         getattr(api, function)(**item)
-                        CHAR = 'C' if 'create' in function else 'U'
+                        res = 'C' if 'create' in function else 'U'
                 except Exception as e:
-                    CHAR = 'X'                   
+                    res = 'X'                   
                     result = (False, 'setApiToZabbix, %s.%s, %s' % (method.removesuffix('Extend'), function, e))
 
                 # 表示（仮）
-                print(f'{CHAR}', end='', flush=True)
+                print(f'{res}', end='', flush=True)
 
                 if not result[0]:
                     return result
@@ -4595,19 +4597,21 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             # Proxy変換
             if self.VERSION['major'] >= 7.0:
                 # 7.0対応 プロキシグループとの区別が追加
-                monitorBy = {'DIRECT': 0, 'PROXY': 1, 'PROXY_GROUP': 2}
-                monitor = monitorBy.get(host.pop('monitored_by', None), 0)
+                # 各所で表記ブレブレなのどうにかしてよ……
+                monitorBy = {'direct': 0, 'proxy': 1, 'proxy_group': 2}
+                proxyType = data.pop('monitored_by', 'direct').lower()
+                monitor = monitorBy.get(proxyType, 0)
                 if monitor > 0:
                     # proxyの種類と対象を決定
-                    proxyType = monitor.lower()
-                    proxy = host.pop(proxyType)['name']
+                    proxy = data.pop(proxyType)['name']
                     # プロキシ情報を追加
-                    host.update(
+                    data.update(
                         {
                             'monitored_by': monitor,
-                            proxyType + 'id': self.replaceIdName(proxyType, proxy)
+                            proxyType + 'id': self.replaceIdName(proxyType.replace('_', ''), proxy)
                         }
                     )
+                    print(host)
             else:
                 proxy = host.pop('proxy', None)
                 if proxy:
@@ -4729,17 +4733,16 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             function = host['function']
             name = host['name']
             data = host['data']
-            CHAR = 'C' if function == 'create' else 'U'
+            res = 'C' if function == 'create' else 'U'
             try:
                 getattr(self.ZAPI.host, function)(**data)
                 result = (True, function)
-                # 表示（仮）
-                print(CHAR, end='', flush=True)
             except Exception as e:
                 # hostはインポート失敗しても止めずに進める
                 result = (False, function, name, e)
-                # 表示（仮）
-                print('X', end='', flush=True)
+                res = 'X'
+            # 表示（仮）
+            print(f'{res}', end='', flush=True)
             return result
 
         # host.createの並列実行、実行数はphp-fpmのフォーク数以下にする
@@ -4756,8 +4759,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         futures.as_completed(fs=future_list)
 
         result = [item._result for item in future_list]
-        create = len([item for item in result if item[1] == 'create'])
-        update = len([item for item in result if item[1] == 'update'])
+        create = len([item for item in result if item[0] and item[1] == 'create'])
+        update = len([item for item in result if item[0] and item[1] == 'update'])
         failed = [item for item in result if not item[0]]
 
         # 表示（仮）
@@ -5008,9 +5011,16 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         # ストアデータ格納変数の初期化
         self.STORE = {}
 
+        # 表示（仮）
+        print(f'\n{TAB*2}Export Zabbix Configuration: ', end = '', flush=True)
+
         # configuration.export対象のデータを取得
         if not self.getConfigurationFromZabbix():
             return (False, 'getConfigurationFromZabbix, Failed')
+
+        # 表示（仮）
+        print(f'Done.', end='', flush=True)
+        print(f'\n{TAB*2}Convert Zabbix Data to Clone Data: ', end='', flush=True)
 
         # LOCALのデータをSTOREに複製
         for method, data in self.LOCAL.items():
@@ -5039,27 +5049,50 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             if items:
                 self.STORE[method] = items
 
+        # 表示（仮）
+        print(f'Done.', end='', flush=True)
+        print(f'\n{TAB*2}Convert PRE section Data: ', end='', flush=True)
+
         # ID変換が必要なメソッドのデータ変換
         result = self.processingMethodData('PRE')
         if not result[0]:
             return result
 
+        # 表示（仮）
+        print(f'Done.', end='', flush=True)
+        print(f'\n{TAB*2}Convert MID section Data: ', end='', flush=True)
+
         result = self.processingMethodData('MID')
         if not result[0]:
             return result
+
+        # 表示（仮）
+        print(f'Done.', end='', flush=True)
+        print(f'\n{TAB*2}Convert POST section Data: ', end='', flush=True)
 
         result = self.processingMethodData('POST')
         if not result[0]:
             return result
 
+        # 表示（仮）
+        print(f'Done.', end='', flush=True)
+        print(f'\n{TAB*2}Convert ACCOUNT section Data: ', end='', flush=True)
+
         result = self.processingMethodData('ACCOUNT')
         if not result[0]:
             return result
+
+        # 表示（仮）
+        print(f'Done.', end='', flush=True)
+        print(f'\n{TAB*2}Convert Authentication Data: ', end='', flush=True)
 
         # GLOBAL内でこれだけデータ変換処理が必要なので実行
         result = self.processingAuthentication()
         if not result[0]:
             return result
+
+        # 表示（仮）
+        print(f'Done.', end='', flush=True)
 
         return ZC_COMPLETE
 
@@ -5737,7 +5770,7 @@ def main():
                 print(f'\n\n[ABORT] {ZABBIX_TIME()}')
                 print(f'{TAB*2}' + output.replace('\n', f'\n{TAB*2}'))
                 sys.exit(255)
-            print(f'\n{TAB*2}' + output.replace('\n', f'\n{TAB*2}'))
+            print(f'\n{TAB*2}' + output.replace('\n', f'\n{TAB*2}') + '\n')
         print(f'\n[END] {ZABBIX_TIME()}')
     else:
         # clone以外の動作
