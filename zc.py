@@ -4611,7 +4611,6 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             proxyType + 'id': self.replaceIdName(proxyType.replace('_', ''), proxy)
                         }
                     )
-                    print(host)
             else:
                 proxy = host.pop('proxy', None)
                 if proxy:
