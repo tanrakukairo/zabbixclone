@@ -1,5 +1,5 @@
 # ZC (Zabbix Clone)
-
+[English](readme_en.md)
 # 目次
 - [概要](#概要)
     - [動作環境](#動作環境)
@@ -75,9 +75,6 @@
 <hr>
 
 # 概要
-
-(Will be translated into English.)
-
 Zabbixの監視設定をAPIを使って設定元のZabbixから、監視を実行するZabbixに複製するツールです。完全なバックアップではありません。<br>
 また設定元のZabbixに次の２つの設定追加を自動で実施します。
 

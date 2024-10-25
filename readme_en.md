@@ -1,5 +1,5 @@
 # ZC (Zabbix Clone)
-
+[Japanese](readme.md)
 # Contents
 - [Overview](#overview)
     - [Environment](#environment)
