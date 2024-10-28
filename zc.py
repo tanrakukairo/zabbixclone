@@ -768,7 +768,38 @@ class ZabbixCloneParameter():
         discardProperty = {
             'host': ['items', 'triggers', 'discovery_rules'],
             'action': ['actionid', 'operationid', 'opcommand_hstid', 'opcommand_grpid'],
-            'proxy': ['lastaccess', 'version', 'compatibility', 'state', 'auto_compress']
+            'proxy': ['lastaccess', 'version', 'compatibility', 'state', 'auto_compress'],
+            'authentication': {
+                'ldap': [
+                    'ldap_host',
+                    'ldap_port',
+                    'ldap_base_dn',
+                    'ldap_search_attribute',
+                    'ldap_bind_dn',
+                    'ldap_case_sensitive',
+                    'ldap_bind_password',
+                    'ldap_userdirectoryid',
+                    'ldap_jit_status',
+                    'jit_provision_interval',
+                ],
+                'saml': [
+                    'saml_idp_entityid',
+                    'saml_sso_url',
+                    'saml_slo_url',
+                    'saml_username_attribute',
+                    'saml_sp_entityid',
+                    'saml_nameid_format',
+                    'saml_sign_messages',
+                    'saml_sign_assertions',
+                    'saml_sign_authn_requests',
+                    'saml_sign_logout_requests',
+                    'saml_sign_logout_responses',
+                    'saml_encrypt_nameid',
+                    'saml_encrypt_assertions',
+                    'saml_case_sensitive',
+                    'saml_jit_status',
+                ]
+            }
         }
 
         # メジャーバージョンアップで追加されたメソッド、下位バージョンはこれみてスキップする
@@ -1014,6 +1045,7 @@ class ZabbixCloneParameter():
                     'template_groups': value
                 }
             )
+            discardProperty['authentication']['ldap'].append('ldap_userdirectoryid')
 
         # 6.4対応
         # 追加Method
@@ -1044,6 +1076,13 @@ class ZabbixCloneParameter():
                     ]
                 }
             )
+            discardProperty['authentication']['ldap'].extend(
+                [
+                    'ldap_jit_status',
+                    'jit_provision_interval',
+                ]
+            )
+            discardProperty['authentication']['saml'].append('saml_jit_status')
 
         # 7.0対応
         # 追加Method
@@ -2953,12 +2992,68 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             for item in self.STORE['script'].copy():
                 data = item['DATA']
                 targets = ['usergroup']
+                scriptType = int(data['type'])
+                scope = int(data.get('scope', 0))
                 # 5.4対応
                 if self.VERSION['major'] >= 5.4:
                     targets.append('hostgroup')
+                    # Webhook script用プロパティの削除
+                    if scriptType != 0:
+                        # Scriptではない
+                        data.pop('execute_on', None)
+                    if scriptType != 2:
+                        # SSHではない
+                        data.pop('authtype', None)
+                        data.pop('publickey', None)
+                        data.pop('privatekey', None)
+                        if scriptType != 3:
+                            # Telnetでもない
+                            data.pop('username', None)
+                            data.pop('password', None)
+                            data.pop('port', None)
+                    else:
+                        # SSH/Telnetである
+                        if int(data['authtype']) == 0:
+                            # パスワード認証である
+                            data.pop('publickey', None)
+                            data.pop('privatekey', None)
+                        else:
+                            # 鍵認証である
+                            data.pop('password', None)
+                    if scriptType != 5:
+                        # Wehhooではない
+                        data.pop('timeout', None)
+                        data.pop('parameters', None)
+                    if scope not in [2, 4]:
+                        # スコープがmanual host action/manual event actionではない
+                        data.pop('menu_path', None)
+                        data.pop('usrgrpid', None)
+                        data.pop('host_access', None)
+                        data.pop('confirmation', None)
+
                 for method in targets:
                     idName = self.getKeynameInMethod(method, 'id')
-                    data[idName] = self.replaceIdName(method, data[idName])
+                    if data.get(idName):
+                        data[idName] = self.replaceIdName(method, data[idName])
+                # 6.4対応
+                if self.VERSION['major'] >= 6.4:
+                    # URL用プロパティの削除
+                    if scriptType != 6:
+                        data.pop('url', None)
+                        data.pop('new_window', None)
+                # 7.0 対応
+                if self.VERSION['major'] >= 7.0:
+                    # スコープがmanual host action/manual event actionではない
+                    # またはmanualinputが0である
+                    if scope not in [2, 4] or int(data.get('manualinput', 0)) == 0:
+                        data.pop('manualinput', None)
+                        data.pop('manualinput_prompt', None)
+                        data.pop('manualinput_validator', None)
+                        data.pop('manualinput_validator_type', None)
+                        data.pop('manualinput_default_value', None)
+                    else:
+                        if int(data.get('manualinput_validator_type', 0)) == 1:
+                            data.pop('manualinput_default_value', None)
                 items.append(item)
         except Exception as e:
             result = (False, 'processingScript: %s' % e)
@@ -3569,7 +3664,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     targets = ['']
                 for target in targets:
                     rKey = '_'.join([target, 'rights']).lstrip('_')
-                    if not self.checkMasterNode():
+                    if self.getLatestVersion('MASTER_VERSION') < 6.2 and not self.checkMasterNode():
                         # マスターノードが6.0以前のデータはrightsが分離されていないので
                         # ワーカー側処理の場合、*group_rightsはどちらでもrightsを使う
                         rights = data.pop('rights', None)
@@ -4233,27 +4328,29 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             elif method == 'template':
                 templates = []
                 # 6.4 HTTP_AGENT以外に入っている「request_method: POST」を削除
-                if self.VERSION['major'] >= 6.4:
-                    for item in data:
-                        template = item['DATA']
-                        if template.get('items'):
-                            # 通常アイテム
-                            for item in template['items']:
+                for item in data:
+                    template = item['DATA']
+                    if template.get('items'):
+                        # 通常アイテム
+                        for item in template['items']:
+                            if self.VERSION['major'] >= 6.4:
                                 if item.get('type') != 'HTTP_AGENT':
                                     item.pop('request_method', None)
-                        if template.get('discovery_rules'):
-                            # LLD
-                            for rule in template.get('discovery_rules', []):
+                    if template.get('discovery_rules'):
+                        # LLD
+                        for rule in template.get('discovery_rules', []):
+                            # LLDのアイテム
+                            if self.VERSION['major'] >= 6.4:
                                 if rule.get('type') != 'HTTP_AGENT':
-                                    # LLDのアイテム
                                     rule.pop('request_method', None)
-                                if rule.get('item_prototypes'):
-                                    # アイテムのプロトタイプ
-                                    for item in rule['item_prototypes']:
+                            if rule.get('item_prototypes'):
+                                # アイテムのプロトタイプ
+                                for item in rule['item_prototypes']:
+                                    if self.VERSION['major'] >= 6.4:
                                         if item.get('type') != 'HTTP_AGENT':
                                             item.pop('request_method', None)
-                        templates.append(template)
-                    templates = sorted(templates, key=lambda x:x['name'])
+                    templates.append(template)
+                templates = sorted(templates, key=lambda x:x['name'])
             elif method == 'mediatype':
                 for item in data:
                     mediatype = item['DATA']
@@ -4283,7 +4380,6 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 importData[section] = [item['DATA'] for item in data]
 
         importData = [importData]
-
         # テンプレートの分割処理
         group = 0
         groups = {}
@@ -4299,7 +4395,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 ptypeTemplate = []
                 for lld in template.get('discovery_rules', []):
                     for ptype in lld.get('host_prototypes', []):
-                        ptypeTemplate.extend([item['name'] for item in ptype['templates']])
+                        ptypeTemplate.extend([item['name'] for item in ptype.get('templates', [])])
                 set(ptypeTemplate)
                 if not LISTA_ALL_IN_LISTB(ptypeTemplate, processed):
                     continue
@@ -4317,10 +4413,11 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             group += 1
         # さらにそれぞれのグループをZC_TEMPLATE_SEPARATEずつ分離してimportDataに追加
         # 一応0から順にソートする
+        count = 0
         for group in sorted(groups.keys()):
             items = groups[group]
-            count = 0
             # インポートエラーが一つでも出ると全部巻き込まれるので、１つずつ入れることにした
+            count = 0
             while len(items) > count:
                 importTemplate['templates'] = [items[count]]
                 importData.append(importTemplate.copy())
@@ -4328,15 +4425,15 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
 
         # インポートデータ処理
         # テンプレートとホスト以外を全部処理、次にテンプレートをZC_TEMPLATE_SEPARATEずつ処理、ホストは次のファンクション
-        if count > 0:
+        if len(importData) > 1:
             # 表示（仮）
             print(f'\n{TAB*2}Template Import:\n{TAB*3}', end='', flush=True)
             if self.CONFIG.templateSkip:
                 print('SKIP.')
             
-            templateResult = {'success': 0, 'failed': 0, 'messages': []}
         # 表示（仮）
         dispRow = 1
+        templateResult = {'success': 0, 'failed': 0, 'messages': []}
         for importItems in importData:
             # テンプレート用処理
             if 'templates' in importItems.keys():
@@ -4346,6 +4443,15 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 templateProcess = importItems['templates'][0]['name']
             else:
                 templateProcess = None
+            importItems.update(
+                {
+                    'version': str(self.getLatestVersion('MASTER_VERSION')),
+                    'date': ZABBIX_TIME()
+                }
+            )
+            # 7.0対応
+            if self.getLatestVersion('MASTER_VERSION') >= 7.0:
+                importItems.pop('date', None)
             # インポート内容のJSONテキスト化
             try:
                 importItems = '{"zabbix_export":%s}' % json.dumps(importItems, ensure_ascii=False)
@@ -4390,7 +4496,6 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 else:
                     # テンプレート以外の失敗は即終了
                     print(e)
-                    print(importItems)
                     return (False, 'Failed Execute Import.')
                 
             # テンプレートの実行中の改行
@@ -4402,11 +4507,12 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
 
         # テンプレートインポートの結果
         # 表示（仮）
-        if count > 0 and templateResult['messages']:
+        if len(importData) > 1:
             print('\n%sSuccess:%s / Failed:%s' % (TAB*3, templateResult['success'], templateResult['failed']))
-            print(f'{TAB*3}Import Error\'s Message:')
-            for message in  templateResult['messages']:
-                print('%s%s: \n%s%s' % (TAB*4, message['name'], TAB*5, message['error']))
+            if templateResult['messages']:
+                print(f'{TAB*3}Import Error\'s Message:')
+                for message in  templateResult['messages']:
+                    print('%s%s: \n%s%s' % (TAB*4, message['name'], TAB*5, message['error']))
 
         # テンプレート適用したのでZabbixからデータを取得、IDREPLACEの更新
         result = self.getDataFromZabbix()
@@ -5257,42 +5363,106 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         if not self.STORE.get('authentication'):
             # 認証のAPIがないバージョンではデータがないのでスキップ
             return (True, 'No Exsit Authentication.')
+        
         # 認証設定
         data = {}
         [data.update(item['DATA']) for item in self.STORE['authentication']]
-        # LDAP利用しない
-        if int(data.get('ldap_auth_enabled', 0)) == 0:
-            ldap = False
-            data.pop('ldap_case_sensitive', None)
-            data.pop('ldap_userdirectoryid', None)
-            data.pop('ldap_jit_status', None)
-            data.pop('jit_provision_interval', None)
-        else:
-            ldap = True
-        # SAML利用しない
-        if int(data.get('saml_auth_enabled', 0)) == 0:
-            saml = False
-            data.pop('saml_case_sensitive', None)
-            data.pop('saml_jit_status', None)
-        else:
-            saml = True
-        if ldap or saml:
-            # LDAP/SAMLどちらかを利用する場合は変換する
-            id = self.replaceIdName('usergroup', data['disabled_usrgrpid'])
-            if id:
-                data['disabled_usrgrpid'] = id
-        else:
-            # LDAP/SAMLどちらも利用しない場合
-            data.pop('disabled_usrgrpid')
-        # MFA利用
-        if int(data.get('mfa_status', 0)) == 0:
-            data.pop('mfa_status', None)
-            data.pop('mfaid', None)
-        else:
-            # デフォルト利用のMFAのID変換処理
-            id = self.replaceIdName('mfa', data['mfaid'])
-            if id:
-                data['mfaid'] = id
+        # 6.2以下対応
+        # ディレクトリサービス認証を使用しない場合は削除
+        if self.VERSION['major'] <= 6.2:
+            if not int(data.get('idap_configured', 0)):
+                for param in self.discardProperty['authentication']['ldap']:
+                    data.pop(param, None)
+                data.pop('idap_configured', None)
+            if not int(data.get('saml_auth_enabled')):
+                for param in self.discardProperty['authentication']['saml']:
+                    data.pop(param, None)
+                data.pop('saml_auth_enabled', None)
+        # 6.2対応
+        if self.VERSION['major'] >= 6.2:
+            if self.getLatestVersion('MASTER_VERSION') < 6.2:
+                # 6.2以降、userdirectoryが新設されてLDAP設定がそちらに移動
+                if int(data.get('ldap_configured')):
+                    ldapParams = {
+                        'name': 'LDAP Converted 6.0 -> 6.2 later by ZC'
+                    }
+                    for param in self.discardProperty['authentication']['ldap']:
+                        value = data.pop(param, '').removeprefix('ldap_')
+                        if value:
+                            ldapParams.update(
+                                {
+                                    param.removeprefix('ldap_'): value
+                                }
+                            )
+                    if ldapParams.get('host'):
+                        try:
+                            res = self.ZAPI.userdirectory.create(**ldapParams)
+                        except:
+                            res = []
+                        if res:
+                            data['ldap_auth_enabled'] = 1
+                            data['ldap_userdirectoryid'] = res['userdirectoryids'][0]
+    
+        # 6.4対応
+        if self.VERSION['major'] >= 6.4:
+            if self.getLatestVersion('MASTER_VERSION') < 6.4:
+                # SAMLがuserdirectoryに移動
+                if int(data.get('saml_auth_enabled', 0)):
+                    samlParams = {
+                        'name': 'SAML Converted 6.0/6.2 -> 6.4 later by ZC',
+                        'idp_type': 1
+                    }
+                    for param in self.discardProperty['authentication']['saml']:
+                        value = data.pop(param, '').removeprefix('saml_')
+                        if value:
+                            samlParams.update(
+                                {
+                                    param.removeprefix('saml_'): value
+                                }
+                            )
+                    if samlParams.get('idp_entityid'):
+                        try:
+                            res = self.ZAPI.userdirectory.create(**samlParams)
+                        except:
+                            res = []
+                        if not res:
+                            data['saml_auth_enabled'] = 0
+            
+            # LDAP利用しない
+            if int(data.get('ldap_auth_enabled', 0)) == 0:
+                ldap = False
+                for param in self.discardProperty['authentication']['ldap']:
+                    data.pop(param, None)
+                data.pop('ldap_auth_enabled', None)
+            else:
+                ldap = True
+            # SAML利用しない
+            if int(data.get('saml_auth_enabled', 0)) == 0:
+                saml = False
+                for param in self.discardProperty['authentication']['saml']:
+                    data.pop(param, None)
+                data.pop('saml_auth_enabled', None)
+            else:
+                saml = True
+            if ldap or saml:
+                # LDAP/SAMLどちらかを利用する場合は変換する
+                id = self.replaceIdName('usergroup', data['disabled_usrgrpid'])
+                if id:
+                    data['disabled_usrgrpid'] = id
+            else:
+                # LDAP/SAMLどちらも利用しない場合
+                data.pop('disabled_usrgrpid', None)
+        # 7.0対応
+        if self.VERSION['major'] >= 7.0:
+            # MFA利用
+            if int(data.get('mfa_status', 0)) == 0:
+                data.pop('mfa_status', None)
+                data.pop('mfaid', None)
+            else:
+                # デフォルト利用のMFAのID変換処理
+                id = self.replaceIdName('mfa', data['mfaid'])
+                if id:
+                    data['mfaid'] = id
         # ZabbixCloud対応: HTTP AUTH関連が存在しない
         if self.CONFIG.zabbixCloud:
             for property in self.zabbixCloudSpecialItem['authentication']:
@@ -5802,9 +5972,9 @@ def main():
                 if not params.get('version'):
                     sys.exit(f'{command} Required --version.')
                 result = node.getVersionFromStore(params['version'])
-                target = result[1][0]
                 if not result[0]:
                     sys.exit(result[1])
+                target = result[1][0]
                 result = node.getDataFromStore(target)
                 if not result[0]:
                     sys.exit(result[1])
