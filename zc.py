@@ -3206,7 +3206,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 # 7.0でプロキシグループに対応していないので、7.2以降変更の可能性あり
                 idRename = None
                 if self.VERSION['major'] >= 7.0:
-                    if self.getLatestVersion('MASTER_VERSION') < 7.0:
+                    if self.getLatestVersion('MASTER_VERSION') < 7.0 and not self.checkMasterNode():
                         idName = 'proxy_hostid'
                         idRename = 'proxyid'
                     else:
@@ -3241,7 +3241,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             check.pop('key_')
                         # SNMP v1 or v2以外では不要
                         if dType not in snmpV1_2:
-                            check.pop('snmp_community')
+                            check.pop('snmp_community', None)
                         # SNMP v3 以外では不要
                         if dType not in snmpV3:
                             snmpV3Param = [
@@ -3566,19 +3566,18 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 if self.VERSION['major'] >= 6.2:
                     targets = ['hostgroup', 'templategroup']
                 else:
-                    targets = [None]
+                    targets = ['']
                 for target in targets:
-                    rKey = '_'.join([target, 'rights'])
-                    if not data.get(rKey):
-                        # 空の場合は項目を消す
-                        data.pop(rKey, None)
-                        continue
-                    if self.getLatestVersion('MASTER_VERSION') < 6.2 and not self.checkMasterNode():
+                    rKey = '_'.join([target, 'rights']).lstrip('_')
+                    if not self.checkMasterNode():
                         # マスターノードが6.0以前のデータはrightsが分離されていないので
                         # ワーカー側処理の場合、*group_rightsはどちらでもrightsを使う
-                        rights = data.pop('rights')
+                        rights = data.pop('rights', None)
                     else:
-                        rights = data.pop(rKey)
+                        rights = data.pop(rKey, None)
+                    if not rights:
+                        # 空なら除外
+                        continue
                     # popしたので初期化
                     data[rKey] = []
                     # 6.0以前の場合はNoneなのでhostgroupにする
@@ -3882,8 +3881,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
 
         # 負荷対策
         # テンプレートはZC_TEMPLATE_SEPARATEごとに分割して別処理
-        loop = 0
-        start = self.CONFIG.templateSeparate * loop
+        start = loop = 0
         while len(templateIds) > start:
             loop += 1
             count = self.CONFIG.templateSeparate * loop
@@ -3904,7 +3902,6 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 exportData.append(json.loads(data.replace('media_types', 'mediaTypes')).get('zabbix_export'))
             except Exception as e:
                 return (False, 'configuration export, Failed, %s' % e)
-
 
         for data in exportData:
             # configurationから不要データを取り除いて成型
@@ -5022,8 +5019,9 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         print(f'\n{TAB*2}Export Zabbix Configuration: ', end = '', flush=True)
 
         # configuration.export対象のデータを取得
-        if not self.getConfigurationFromZabbix():
-            return (False, 'getConfigurationFromZabbix, Failed')
+        result = self.getConfigurationFromZabbix()
+        if not result[0]:
+            return result
 
         # 表示（仮）
         print(f'Done.', end='', flush=True)
