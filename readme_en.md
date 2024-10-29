@@ -809,12 +809,15 @@ Other than that, there are many patterns, so if anyone tries it, please let me k
 
 It is currently unknown if changes to trigger expressions (Zabbix5.4 or later) can be converted in configuration.import().
 
+* 6.0 -> 6.2/6.4, Trigger prototype's dependencies cannot import.
+* 6.0 -> later, Some 6.0's templates, Hostgroup for registering hostprototype cannot be registered because it is a templategroup.
+
 |master|worker|ZabbixCloud|file|dydb|redis|direct|
 |:-:|:-:|:-:|:-:|:-:|:-:|:-:|
 |7.0|7.0|OK|OK|OK|OK|OK|
-|6.0|7.0|*1|||||
-|6.0|6.4|N/A|||||
-|6.0|6.2|N/A|||||
+|6.0|7.0|*1|OK|-|-|-|
+|6.0|6.4|N/A|OK?|-|-|-|
+|6.0|6.2|N/A|OK?|-|-|-|
 |6.0|6.0|N/A|OK|-|-|-|
 |5.0|6.0|N/A|?|?|?|?|
 |5.0|5.4|N/A|?|?|?|?|

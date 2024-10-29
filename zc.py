@@ -654,14 +654,16 @@ class ZabbixCloneParameter():
         sections = {
             # 一般設定グループ
             'GLOBAL': [],
-            # Configuration[export|import]操作グループ（{Method名: ファイル内Section名}）
-            'CONFIGURATION': {
+            # Configuration.export操作グループ（{Method名: ファイル内Section名}）
+            'CONFIG_EXPORT': {
                 'hostgroup': 'groups',
                 'template': 'templates',
                 'host': 'hosts',
                 'valuemap': 'value_maps',
                 'trigger': 'triggers',
             },
+            # Configration.import操作グループ（名前が変わっても同じメソッドに変換する）
+            'CONFIG_IMPORT': {},
             # Configurationの前に実行するグループ（Method名）
             'PRE': [
                 'usermacro',
@@ -764,11 +766,12 @@ class ZabbixCloneParameter():
             },
         }
 
-        # 破棄するプロパティ
-        discardProperty = {
+        # 破棄するパラメーター
+        discardParameter = {
             'host': ['items', 'triggers', 'discovery_rules'],
             'action': ['actionid', 'operationid', 'opcommand_hstid', 'opcommand_grpid'],
-            'proxy': ['lastaccess', 'version', 'compatibility', 'state', 'auto_compress'],
+            'proxy': ['interface', 'lastaccess', 'version', 'compatibility', 'state', 'auto_compress'],
+            'drule': ['nextcheck'],
             'authentication': {
                 'ldap': [
                     'ldap_host',
@@ -801,6 +804,11 @@ class ZabbixCloneParameter():
                 ]
             }
         }
+
+        # CONFIG_IMPORTの生成
+        sections['CONFIG_IMPORT'][4.0] = {}
+        for method, section in sections['CONFIG_EXPORT'].items():
+            sections['CONFIG_IMPORT'][4.0].update({section: method})
 
         # メジャーバージョンアップで追加されたメソッド、下位バージョンはこれみてスキップする
         addMethods = {}
@@ -847,11 +855,13 @@ class ZabbixCloneParameter():
             )
             sections['GLOBAL'].append('autoregistration')
             # METHOD:mediatypeのキー名description->name
-            # MediaTypeのAPI -> CONFIGURATION移動
+            # MediaTypeのAPI -> CONFIG_EXPORT移動
             methodParameters['mediatype']['name'] = 'name'
             methodParameters['mediatype']['options']['output'] = ['name']
             sections['PRE'].remove('mediatype')
-            sections['CONFIGURATION'].update({'mediatype': 'mediaTypes'})
+            sections['CONFIG_EXPORT'].update({'mediatype': 'mediaTypes'})
+            sections['CONFIG_IMPORT'][4.4] = {}
+            sections['CONFIG_IMPORT'][4.4].update({'mediaTypes': 'mediatype'})
             importRules.update(
                 {
                     'mediaTypes': {
@@ -907,6 +917,7 @@ class ZabbixCloneParameter():
                     ]
                 }
             )
+            discardParameter['role'] = ['readonly']
 
         # 5.4対応
         # 追加Method
@@ -916,7 +927,8 @@ class ZabbixCloneParameter():
             methodParameters['user']['name'] = 'username'
             methodParameters['user']['options']['output'] = ['username', 'roleid']
             # valuemapのホスト／テンプレート内への埋め込みによる項目削除（インポートルールは継続）
-            sections['CONFIGURATION'].pop('valuemap', None)
+            sections['CONFIG_EXPORT'].pop('valuemap', None)
+            sections['CONFIG_IMPORT'][4.0].pop('value_maps', None)
             # application/screens廃止に伴うインポートルールの削除
             importRules.pop('applications', None)
             importRules.pop('screens', None)
@@ -994,7 +1006,7 @@ class ZabbixCloneParameter():
             sections['POST'].extend(['service', 'sla'])
             # グローバル設定と正規表現のAPI対応に伴うDBのダイレクト操作の廃止
             sections.pop('DB_DIRECT', None)
-            discardProperty.update(
+            discardParameter.update(
                 {
                     'service': ['status', 'uuid', 'created_at', 'readonly'],
                     'settings': ['ha_failover_delay'],
@@ -1031,10 +1043,17 @@ class ZabbixCloneParameter():
                 }
             )
             # オプションの変更groups -> host_groups、templategroup追加
-            sections['CONFIGURATION'].update(
+            sections['CONFIG_EXPORT'].update(
                 {
                     'hostgroup': 'host_groups',
                     'templategroup':'template_groups'
+                }
+            )
+            sections['CONFIG_IMPORT'][6.2] = {}
+            sections['CONFIG_IMPORT'][6.2].update(
+                {
+                    'host_groups': 'hostgroup',
+                    'template_groups':'templategroup'
                 }
             )
             # インポートルール変更
@@ -1045,7 +1064,7 @@ class ZabbixCloneParameter():
                     'template_groups': value
                 }
             )
-            discardProperty['authentication']['ldap'].append('ldap_userdirectoryid')
+            discardParameter['authentication']['ldap'].append('ldap_userdirectoryid')
 
         # 6.4対応
         # 追加Method
@@ -1076,14 +1095,15 @@ class ZabbixCloneParameter():
                     ]
                 }
             )
-            discardProperty['authentication']['ldap'].extend(
+            discardParameter['authentication']['ldap'].extend(
                 [
                     'ldap_jit_status',
                     'jit_provision_interval',
                 ]
             )
-            discardProperty['authentication']['saml'].append('saml_jit_status')
-
+            discardParameter['authentication']['saml'].append('saml_jit_status')
+            discardParameter['role'].append('services.actions')
+            
         # 7.0対応
         # 追加Method
         addMethods[7.0] = ['proxygroup', 'mfa']
@@ -1183,8 +1203,8 @@ class ZabbixCloneParameter():
         self.dbConfigDropCols = dbConfigDropCols
         # DB直接操作、configテーブルのカラム名変更
         self.dbConfigRenameCols = dbConfigRenameCols
-        # メソッド内で除去するプロパティ
-        self.discardProperty = discardProperty
+        # メソッド内で除去するパラメーター
+        self.discardParameter = discardParameter
         # 7.0対応 アイテム取得のタイムアウト分離
         self.timeoutTarget = timeoutTarget
         # 7.0以降 ZabbixCloudで対応が必要な要素
@@ -2806,7 +2826,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             return (True, 'No Data, action.')
 
         # del_idはcreateでZABBIXがつけるのでデータから削除する
-        readOnly = self.discardProperty['action']
+        readOnly = self.discardParameter['action']
 
         items = []
         try:
@@ -2997,7 +3017,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 # 5.4対応
                 if self.VERSION['major'] >= 5.4:
                     targets.append('hostgroup')
-                    # Webhook script用プロパティの削除
+                    # Webhook script用パラメーターの削除
                     if scriptType != 0:
                         # Scriptではない
                         data.pop('execute_on', None)
@@ -3037,7 +3057,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         data[idName] = self.replaceIdName(method, data[idName])
                 # 6.4対応
                 if self.VERSION['major'] >= 6.4:
-                    # URL用プロパティの削除
+                    # URL用パラメーターの削除
                     if scriptType != 6:
                         data.pop('url', None)
                         data.pop('new_window', None)
@@ -3177,30 +3197,36 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         try:
             for item in self.STORE['proxy'].copy():
                 data = item['DATA']
-                desc = data.get('description', '')
-                # プロキシの指定記述はdescriptionの先頭に「ZC_WORKER:node;」
-                # ZC_NODEが無いまたは複数の記述があるプロキシは削除
-                if len(re.findall(ZC_MONITOR_TAG + ':[0-9a-zA-Z-_.]*;', desc)) != 1:
-                    continue
-                # 7.0対応
-                # active/passiveのモード判定、7.0に合わせて0:active/1:passive
-                if self.VERSION['major'] >= 7.0:
-                    mode = data['operating_mode']
-                    # プロキシグループのID変換
-                    id = self.getKeynameInMethod('proxygroup', 'id')
-                    data[id] = self.replaceIdName('proxygroup', data[id])
-                else:
-                    mode = int(data['status']) - 5
+                # 不要データを削除
+                for param in self.discardParameter['proxy']:
+                    data.pop(param, None)
                 if self.checkMasterNode():
-                    # マスターノードの処理で不要データを削除
-                    for readOnly in self.discardProperty['proxy']:
-                        data.pop(readOnly, None)
                     # 7.0系timeout系は上書きなしまたは空だったら削除
                     for timeout in [param for param in data if re.match('timeout_', param)]:
                         if data['custom_timeouts'] == '0' or not data[timeout]:
                             data.pop(timeout, None)
                 else:
                     #ワーカーノード処理
+                    # プロキシの指定記述はdescriptionの先頭に「ZC_WORKER:node;」
+                    mode = int(data.get('status', 5)) - 5
+                    # 7.0対応
+                    if self.VERSION['major'] >= 7.0:
+                        # active/passiveのモード判定、7.0に合わせて0:active/1:passive
+                        if self.getLatestVersion('MASTER_VERSION') >= 7.0:
+                            mode = data['operating_mode']
+                            # プロキシグループのID変換
+                            id = self.getKeynameInMethod('proxygroup', 'id')
+                            data[id] = self.replaceIdName('proxygroup', data[id])
+                        else:
+                            # 以前のバージョンからの変換
+                            data['name'] = data.pop('host', None)
+                            data['allowed_addresses'] = data.pop('proxy_address', None)
+                            data['operating_mode'] = mode
+                            data.pop('status', None)
+                    # ZC_NODEが無いまたは複数の記述があるプロキシは削除
+                    desc = data.get('description', '')
+                    if len(re.findall(ZC_MONITOR_TAG + ':[0-9a-zA-Z-_.]*;', desc)) != 1:
+                        continue
                     # Discriptionに自分のノード名が載ってないプロキシは削除
                     if not re.match(ZC_MONITOR_TAG + ':%s;' % self.CONFIG.node, desc):
                         if item['NAME'] in self.LOCAL['proxy'].keys():
@@ -3297,10 +3323,14 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         try:
             for item in self.STORE['drule'].copy():
                 data = item['DATA']
+                for param in data.copy().keys():
+                    if param in self.discardParameter['drule']:
+                        data.pop(param, None)
                 # プロキシの変換
                 # 7.0でプロキシグループに対応していないので、7.2以降変更の可能性あり
                 idRename = None
                 if self.VERSION['major'] >= 7.0:
+                    # ワーカーノードで7.0未満のマスターノードのデータ
                     if self.getLatestVersion('MASTER_VERSION') < 7.0 and not self.checkMasterNode():
                         idName = 'proxy_hostid'
                         idRename = 'proxyid'
@@ -3314,6 +3344,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     continue
                 if idRename:
                     data[idRename] = id
+                    data.pop(idName, None)
                 else:
                     data[idName] = id
                 if self.checkMasterNode():
@@ -3373,7 +3404,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     data = item['DATA']
                     # 加工するのはmaterノードのみ
                     # 空データの削除
-                    for param in self.discardProperty['sla']:
+                    for param in self.discardParameter['sla']:
                         if not data.get(param):
                             data.pop(param, None)
                 items.append(item)
@@ -3410,7 +3441,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 if self.checkMasterNode():
                     # masterノード処理
                     # read-onlyの削除
-                    [data.pop(param, None) for param in self.discardProperty['service']]
+                    [data.pop(param, None) for param in self.discardParameter['service']]
                     # parents/childrenのnameの中身のみのリスト化
                     data['parents'] = [parent['name'] for parent in data['parents']]
                     data['children'] = [child['name'] for child in data['children']]
@@ -3747,14 +3778,43 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         items = []
         try:
             for item in self.STORE['role'].copy():
-                # 不要項目を削除
-                item['DATA'].pop('readonly', None)
+                data = item['DATA']
                 if not self.checkMasterNode():
                     # ワーカーノード側
+                    # 不要項目を削除
+                    for param in data.copy().keys():
+                        if param in self.discardParameter['role']:
+                            data.pop(param, None)
+                    rules = data['rules']
+                    for rule, params in rules.copy().items():
+                        if rule in self.discardParameter['role']:
+                            rules.pop(rule)
+                            continue
+                        if isinstance(params, list):
+                            for param in params:
+                                if param.get('name') in self.discardParameter['role']:
+                                    rules[rule].remove(param)
+                    if self.VERSION['major'] >= 6.4:
+                        # configuration.actionsの分割
+                        value = 0
+                        for param in data['rules']['ui'].copy():
+                            if param.get('name') == 'configuration.actions':
+                                value = int(param['status'])
+                                data['rules']['ui'].remove(param)
+                        if value and self.getLatestVersion('MASTER_VERSION') < 6.4:
+                            data['rules']['ui'].extend(
+                                [
+                                    {'name': 'configuration.trigger_actions', 'status': value},
+                                    {'name': 'configuration.service_actions', 'status': value},
+                                    {'name': 'configuration.discovery_actions', 'status': value},
+                                    {'name': 'configuration.autoregistration_actions', 'status': value},
+                                    {'name': 'configuration.internal_actions', 'status': value},
+                                ]
+                            )
                     if self.CONFIG.zabbixCloud:
                         # ZabbixCloud対応: Module関連が存在しない
-                        for property in self.zabbixCloudSpecialItem['role']:
-                            item['DATA']['rules'].pop(property, None)
+                        for param in self.zabbixCloudSpecialItem['role']:
+                            item['DATA']['rules'].pop(param, None)
                 items.append(item)
         except Exception as e:
             return (False, 'processingRole: %s' % e)
@@ -3958,7 +4018,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         exportIds = {}
         templateIds=[]
         convSectionToMethod = {}
-        for method, section in self.sections['CONFIGURATION'].items():
+        for method, section in self.sections['CONFIG_EXPORT'].items():
             # option->methodの逆引き辞書を作る
             convSectionToMethod.update({section: method})
             if method == 'trigger':
@@ -4180,7 +4240,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             # グローバル設定
             globalSettings = {}
             for item in self.STORE.get('settings', []):
-                if item['NAME'] in self.discardProperty['settings']:
+                if item['NAME'] in self.discardParameter['settings']:
                     continue
                 globalSettings.update(item['DATA'])
 
@@ -4296,33 +4356,28 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
     def setConfigurationToZabbix(self):
         '''
         STOREからZabbixインポートデータの生成、適用
-        CONFIGURATIONセクション
+        CONFIG_IMPORTセクション
         '''
 
-        # インポートデータのJSONベース
-        importData = {
-            'version': str(self.getLatestVersion('MASTER_VERSION')),
-            'date': ZABBIX_TIME()
-        }
-        # 6.4以降 date廃止
-        if self.VERSION['major'] >= 6.4:
-            importData.pop('date')
-
-        importTemplate = importData.copy()
-        importTemplate.update(
-            {
-                'triggers': [trigger['DATA'] for trigger in self.STORE.get('trigger', [])] 
-            }
-        )
+        # バージョン対応のメソッド-セクション対応dictの生成
+        sections = {}
+        for masterVersion, imports in self.sections['CONFIG_IMPORT'].items():
+            # 適用するバージョンより処理バージョンの方が大きければ必要なし
+            if masterVersion > self.getLatestVersion('MASTER_VERSION'):
+                continue
+            else:
+                for section, method in imports.items():
+                    sections[method] = section
 
         # データ作成
-        for method, section in self.sections['CONFIGURATION'].items():
+        importData = {}
+        for method, section in sections.items():
             data = self.STORE.get(method)
             if not data:
                 continue
             if method == 'trigger':
                 continue
-            if method == 'host':
+            elif method == 'host':
                 # hostは並列処理createで入れるのでスキップ、項目は必要
                 importData[section] = []
             elif method == 'template':
@@ -4374,13 +4429,17 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     if self.VERSION['major'] >= 7.0:
                         # 7.0 content_type完全廃止
                         mediatype.pop('content_type', None)
-                    # mediatypeの表記ゆれ対応
+                # mediatypeの表記ゆれ対応
+
                 importData['media_types'] = [item['DATA'] for item in data]
             else:
                 importData[section] = [item['DATA'] for item in data]
 
         importData = [importData]
+        triggers = [trigger['DATA'] for trigger in self.STORE.get('trigger', [])] 
+
         # テンプレートの分割処理
+        templateGroup = []
         group = 0
         groups = {}
         processed = []
@@ -4391,6 +4450,9 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             # グループ２：グループ０，１をリンクしている
             # …前グループをリンクしているものがなくなるまで繰り返して分類
             for template in templates.copy():
+                # 6.0以前のテンプレートのグループ対応
+                if template.get('groups'):
+                    templateGroup.extend(template['groups'])
                 # ホストのプロトタイプのテンプレートを確認し、processedになければ飛ばす
                 ptypeTemplate = []
                 for lld in template.get('discovery_rules', []):
@@ -4419,26 +4481,58 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             # インポートエラーが一つでも出ると全部巻き込まれるので、１つずつ入れることにした
             count = 0
             while len(items) > count:
-                importTemplate['templates'] = [items[count]]
-                importData.append(importTemplate.copy())
+                if self.VERSION['major'] in [6.2, 6.4]:
+                    # trigger prototype内の依存関係以外はこれで入る
+                    self.importRules['triggers']['createMissing'] = False
+                    importData.append({'templates': [items[count]]})
+                else:
+                    # 6.0/7.0だとこっちで依存関係のは問題なく全部入る
+                    # なんで？？？？
+                    importData.append(
+                        {
+                            'templates': [items[count]],
+                            'triggers': triggers
+                        }
+                    )
                 count += 1
+
+        # マスターのバージョンが6.2未満でノード側が6.2以上の場合
+        if self.getLatestVersion('MASTER_VERSION') < 6.2 and self.VERSION['major'] >= 6.2:
+            templateGroup = [item['name'] for item in templateGroup]
+            templateGroup = set(sorted(templateGroup))
+            # ホストグループの内templateGroupにあるものは除外
+            groups = []
+            for group in importData[0]['groups'].copy():
+                if group['name'] in templateGroup:
+                    continue
+                groups.append(group)
+            importData[0]['groups'] = groups
+            for item in templateGroup:
+                if item in self.LOCAL['templategroup'].keys():
+                    continue
+                try:
+                    self.ZAPI.templategroup.create(**{'name': item})
+                except Exception as e:
+                    print(e)
+                    return (False, 'Failed Convert Hostgroup before 6.2 -> Templategroup 6.2 or later. %s. %s' % (item, e))
 
         # インポートデータ処理
         # テンプレートとホスト以外を全部処理、次にテンプレートをZC_TEMPLATE_SEPARATEずつ処理、ホストは次のファンクション
-        if len(importData) > 1:
-            # 表示（仮）
-            print(f'\n{TAB*2}Template Import:\n{TAB*3}', end='', flush=True)
-            if self.CONFIG.templateSkip:
-                print('SKIP.')
+        # 表示（仮）
+        print(f'\n{TAB*2}Template Import:\n{TAB*3}', end='', flush=True)
+        if self.CONFIG.templateSkip:
+            print('SKIP.')
             
         # 表示（仮）
         dispRow = 1
         templateResult = {'success': 0, 'failed': 0, 'messages': []}
+        skip = False
         for importItems in importData:
+            if skip and self.CONFIG.templateSkip:
+                continue
+            skip = True
             # テンプレート用処理
             if 'templates' in importItems.keys():
-                if self.CONFIG.templateSkip:
-                    continue
                 # 処理するテンプレートの名前
                 templateProcess = importItems['templates'][0]['name']
             else:
@@ -4452,6 +4546,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             # 7.0対応
             if self.getLatestVersion('MASTER_VERSION') >= 7.0:
                 importItems.pop('date', None)
+
             # インポート内容のJSONテキスト化
             try:
                 importItems = '{"zabbix_export":%s}' % json.dumps(importItems, ensure_ascii=False)
@@ -4495,8 +4590,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     print('X', end='', flush=True)
                 else:
                     # テンプレート以外の失敗は即終了
-                    print(e)
-                    return (False, 'Failed Execute Import.')
+                    return (False, 'Failed Execute Import. %s' % e)
                 
             # テンプレートの実行中の改行
             # 表示（仮）
@@ -4657,7 +4751,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 # 監視対象ではないので次の処理
                 continue
             # ホスト直設定のアイテム、トリガー、LLDは除外
-            [data.pop(section, None) for section in self.discardProperty['host']]
+            [data.pop(section, None) for section in self.discardParameter['host']]
             # バリューなしのキーを削除:5.x系であったcreateの空データ無視がなくなった時の対応（だったかな）
             [data.pop(key, None) for key, value in data.copy().items() if not value]
             # インベントリモードの変換:MANUALの場合キーが存在しない
@@ -5371,22 +5465,25 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         # ディレクトリサービス認証を使用しない場合は削除
         if self.VERSION['major'] <= 6.2:
             if not int(data.get('idap_configured', 0)):
-                for param in self.discardProperty['authentication']['ldap']:
+                for param in self.discardParameter['authentication']['ldap']:
                     data.pop(param, None)
                 data.pop('idap_configured', None)
             if not int(data.get('saml_auth_enabled')):
-                for param in self.discardProperty['authentication']['saml']:
+                for param in self.discardParameter['authentication']['saml']:
                     data.pop(param, None)
                 data.pop('saml_auth_enabled', None)
         # 6.2対応
         if self.VERSION['major'] >= 6.2:
+            if self.VERSION['major'] == 6.2:
+                # バグってLDAPサーバーが設定されていないと０でも１でも弾くので削除、バーカバーカ
+                data.pop('authentication_type', None)
             if self.getLatestVersion('MASTER_VERSION') < 6.2:
                 # 6.2以降、userdirectoryが新設されてLDAP設定がそちらに移動
                 if int(data.get('ldap_configured')):
                     ldapParams = {
                         'name': 'LDAP Converted 6.0 -> 6.2 later by ZC'
                     }
-                    for param in self.discardProperty['authentication']['ldap']:
+                    for param in self.discardParameter['authentication']['ldap']:
                         value = data.pop(param, '').removeprefix('ldap_')
                         if value:
                             ldapParams.update(
@@ -5405,6 +5502,10 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
     
         # 6.4対応
         if self.VERSION['major'] >= 6.4:
+            # 古いバージョンのパラメーターだったら変換
+            value = data.pop('ldap_configured', None)
+            if value:
+                data.update({'ldap_auth_enabled': int(value)})
             if self.getLatestVersion('MASTER_VERSION') < 6.4:
                 # SAMLがuserdirectoryに移動
                 if int(data.get('saml_auth_enabled', 0)):
@@ -5412,7 +5513,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         'name': 'SAML Converted 6.0/6.2 -> 6.4 later by ZC',
                         'idp_type': 1
                     }
-                    for param in self.discardProperty['authentication']['saml']:
+                    for param in self.discardParameter['authentication']['saml']:
                         value = data.pop(param, '').removeprefix('saml_')
                         if value:
                             samlParams.update(
@@ -5431,7 +5532,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             # LDAP利用しない
             if int(data.get('ldap_auth_enabled', 0)) == 0:
                 ldap = False
-                for param in self.discardProperty['authentication']['ldap']:
+                for param in self.discardParameter['authentication']['ldap']:
                     data.pop(param, None)
                 data.pop('ldap_auth_enabled', None)
             else:
@@ -5439,7 +5540,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             # SAML利用しない
             if int(data.get('saml_auth_enabled', 0)) == 0:
                 saml = False
-                for param in self.discardProperty['authentication']['saml']:
+                for param in self.discardParameter['authentication']['saml']:
                     data.pop(param, None)
                 data.pop('saml_auth_enabled', None)
             else:
@@ -5881,7 +5982,7 @@ def main():
             # グローバル設定の適用
             # nodeインスタンスのデータへ最新バージョンを適用
             # APIセクションの適用（usermacro/usergroup/user/...）
-            # CONFIGURATIONセクションのインポート生成&実行（hostgroup/templategroup/template/mediatype/trigger）
+            # CONFIG_IMPORTセクションのインポート生成&実行（hostgroup/templategroup/template/mediatype/trigger）
             # host適用（ここでのメイン記述）
             # Zabbixからのデータ再取得
             # REPLACEセクションの適用（action/script/maintenance/...）
