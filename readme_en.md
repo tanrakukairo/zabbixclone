@@ -810,7 +810,7 @@ Other than that, there are many patterns, so if anyone tries it, please let me k
 It is currently unknown if changes to trigger expressions (Zabbix5.4 or later) can be converted in configuration.import().
 
 * 6.0 -> 6.2/6.4, Trigger prototype's dependencies cannot import.
-* 6.0 -> later, Some 6.0's templates, Hostgroup for registering hostprototype cannot be registered because it is a templategroup.
+* 6.0 -> later, Some 6.0's templates, Template configured hostgroup for hostprototype cannot be registered because that hostgroup is changed templategroup.
 
 "-" is skiped tests because it's same codes as 7.0 -> 7.0 tests.
 
