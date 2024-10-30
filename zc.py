@@ -4804,24 +4804,27 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     hostIf['bulk'] = Y_N[hostIf.get('bulk', 'YES')]
             # Proxy変換
             if self.VERSION['major'] >= 7.0:
-                # 7.0対応 プロキシグループとの区別が追加
-                # 各所で表記ブレブレなのどうにかしてよ……
-                proxyType = data.pop('monitored_by', 'direct').lower()
+                if self.getLatestVersion('MASTER_VERSION') >= 7.0:
+                    # 7.0対応 プロキシグループとの区別が追加
+                    # 各所で表記ブレブレなのどうにかしてよ……
+                    proxyType = data.pop('monitored_by', 'direct').lower()
+                else:
+                    proxyType = 'proxy'
                 monitor = ZABBIX_PROXY_MODE.get(proxyType, 0)
                 if monitor > 0:
                     # proxyの種類と対象を決定
-                    proxy = data.pop(proxyType)['name']
+                    proxy = data.pop(proxyType, None)
                     # プロキシ情報を追加
                     data.update(
                         {
                             'monitored_by': monitor,
-                            proxyType + 'id': self.replaceIdName(proxyType.replace('_', ''), proxy)
+                            proxyType + 'id': self.replaceIdName(proxyType.replace('_', ''), proxy['name'])
                         }
                     )
             else:
-                proxy = host.pop('proxy', None)
+                proxy = data.pop('proxy', None)
                 if proxy:
-                    host['proxy_hostid'] = self.replaceIdName('proxy', proxy)
+                    data['proxy_hostid'] = self.replaceIdName('proxy', proxy['name'])
             # テンプレートとホストグループのID変換
             for method in ['template', 'hostgroup']:
                 section = method + 's'
