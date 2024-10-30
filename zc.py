@@ -2456,6 +2456,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 version = [item for item in self.VERSIONS if item['VERSION_ID'] == version]
                 self.VERSIONS.remove(version[0])
                 self.VERSIONS.insert(0, version[0])
+                version = version[0]['VERSION_ID']
             
             # 表示（仮）
             info = self.getLatestVersion('DESCRIPTION')
