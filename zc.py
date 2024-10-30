@@ -3197,28 +3197,34 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         try:
             for item in self.STORE['proxy'].copy():
                 data = item['DATA']
-                # 不要データを削除
-                for param in self.discardParameter['proxy']:
-                    data.pop(param, None)
                 if self.checkMasterNode():
+                    # 7.0対応
+                    if self.VERSION['major'] >= 7.0:
+                        # プロキシグループのID変換
+                        id = self.getKeynameInMethod('proxygroup', 'id')
+                        data[id] = self.replaceIdName('proxygroup', data[id])
+                else: 
+                    # ワーカーノード処理
+                    # 不要データを削除
+                    for param in self.discardParameter['proxy']:
+                        data.pop(param, None)
                     # 7.0系timeout系は上書きなしまたは空だったら削除
                     for timeout in [param for param in data if re.match('timeout_', param)]:
-                        if data['custom_timeouts'] == '0' or not data[timeout]:
+                        if int(data.get('custom_timeouts', 0)) == 0 or not data.get(timeout):
                             data.pop(timeout, None)
-                else:
-                    #ワーカーノード処理
                     # プロキシの指定記述はdescriptionの先頭に「ZC_WORKER:node;」
                     mode = int(data.get('status', 5)) - 5
                     # 7.0対応
                     if self.VERSION['major'] >= 7.0:
                         # active/passiveのモード判定、7.0に合わせて0:active/1:passive
+                        id = self.getKeynameInMethod('proxygroup', 'id')
                         if self.getLatestVersion('MASTER_VERSION') >= 7.0:
-                            mode = data['operating_mode']
                             # プロキシグループのID変換
-                            id = self.getKeynameInMethod('proxygroup', 'id')
                             data[id] = self.replaceIdName('proxygroup', data[id])
+                            mode = data['operating_mode']
                         else:
                             # 以前のバージョンからの変換
+                            data[id] = 0
                             data['name'] = data.pop('host', None)
                             data['allowed_addresses'] = data.pop('proxy_address', None)
                             data['operating_mode'] = mode
