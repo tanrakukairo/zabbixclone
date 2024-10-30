@@ -2445,21 +2445,24 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             # ワーカーノード側処理
             # 適用バージョンの確認
             version = self.CONFIG.targetVersion
-            if not version:
+            if version is None:
                 version = self.getLatestVersion('VERSION_ID')
             elif version not in [item['VERSION_ID'] for item in self.VERSIONS]:
                 version = self.getLatestVersion('VERSION_ID')
                 lostVersion = self.CONFIG.targetVersion
-                self.CONFIG.targetVersion = 'NO_EXIST'
+                self.CONFIG.targetVersion = False
             else:
-                pass
+                # 適用バージョンを先頭に入れ替え（getLatest～の値変更）
+                version = [item for item in self.VERSIONS if item['VERSION_ID'] == version]
+                self.VERSIONS.remove(version[0])
+                self.VERSIONS.insert(0, version[0])
             
             # 表示（仮）
             info = self.getLatestVersion('DESCRIPTION')
             if info:
                 info = info.replace(', ', f'\n{TAB*3}')
             print(f'\n{TAB*2}Cloning Version: {version}', flush=True)
-            if self.CONFIG.targetVersion == 'NO_EXIST':
+            if self.CONFIG.targetVersion is False:
                 print(f'{TAB*3}Change Latest, No Exist:{lostVersion}.', flush=True)
             if info:
                 print(f'{TAB*2}Version Information:\n{TAB*3}{info}', flush=True)
