@@ -812,6 +812,8 @@ It is currently unknown if changes to trigger expressions (Zabbix5.4 or later) c
 * 6.0 -> 6.2/6.4, Trigger prototype's dependencies cannot import.
 * 6.0 -> later, Some 6.0's templates, Hostgroup for registering hostprototype cannot be registered because it is a templategroup.
 
+"-" is skiped tests because it's same codes as 7.0 -> 7.0 tests.
+
 |master|worker|ZabbixCloud|file|dydb|redis|direct|
 |:-:|:-:|:-:|:-:|:-:|:-:|:-:|
 |7.0|7.0|OK|OK|OK|OK|OK|
