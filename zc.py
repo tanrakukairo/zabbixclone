@@ -545,7 +545,7 @@ class ZabbixCloneParameter():
                 'id': 'userid',
                 'name': 'alias',
                 'options': {
-                    'output': ['alias'],
+                    'output': ['alias', 'type'],
                     'getAccess': True,
                     'selectUsrgrps': ['name'],
                     'selectMedias': 'extend'
@@ -659,7 +659,7 @@ class ZabbixCloneParameter():
                 'hostgroup': 'groups',
                 'template': 'templates',
                 'host': 'hosts',
-                'valuemap': 'value_maps',
+                'valuemap': 'valueMaps',
                 'trigger': 'triggers',
             },
             # Configration.import操作グループ（名前が変わっても同じメソッドに変換する）
@@ -808,6 +808,8 @@ class ZabbixCloneParameter():
         # CONFIG_IMPORTの生成
         sections['CONFIG_IMPORT'][4.0] = {}
         for method, section in sections['CONFIG_EXPORT'].items():
+            if method == 'valuemap':
+                section = 'value_maps'
             sections['CONFIG_IMPORT'][4.0].update({section: method})
 
         # メジャーバージョンアップで追加されたメソッド、下位バージョンはこれみてスキップする
@@ -2239,30 +2241,25 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
 
         # ZabbixServer設定読み込み
         serverConf = os.path.join(ZABBIX_CONFIG_PATH, ZABBIX_SERVER_CONFIG)
-        if not os.path.exists(serverConf):
-            return (False, 'No Exists Zabbix Server ConfigFile, %s.' % serverConf)
-        if not os.access(serverConf, os.R_OK):
-            return (False, 'No Readble Zabbix Server ConfigFile, %s' % serverConf)
-
-        # Zabbix Server設定のデータベース設定を取得
-        with open(serverConf, 'r') as f:
-            serverConf = [
-                conf.strip().split('=') for conf in f.readlines() if conf.strip() != '' and conf[0] != '#'
+        if os.path.exists(serverConf) and os.access(serverConf, os.R_OK):
+            # Zabbix Server設定のデータベース設定を取得
+            with open(serverConf, 'r') as f:
+                serverConf = [
+                    conf.strip().split('=') for conf in f.readlines() if conf.strip() != '' and conf[0] != '#'
+                ]
+            [
+                dbConnect.update(
+                    {conf[0]: conf[1]}
+                ) for conf in serverConf if len(conf) == 2 and conf[0] in dbConnect.keys()
             ]
-        [
-            dbConnect.update(
-                {conf[0]: conf[1]}
-            ) for conf in serverConf if len(conf) == 2 and conf[0] in dbConnect.keys()
-        ]
-
-        # 成型{'dbConnect': {'name':'', 'host':'', 'port':'', 'user':'', 'password':'', 'library':''}}
-        for conf, value in dbConnect.items():
-            # db_xxxxxxx で全部小文字
-            dbConnect.update(
-                {
-                    conf[3:].lower() : value
-                }
-            )
+            # 成型{'dbConnect': {'name':'', 'host':'', 'port':'', 'user':'', 'password':'', 'library':''}}
+            for conf, value in dbConnect.items():
+                # db_xxxxxxx で全部小文字
+                dbConnect.update(
+                    {
+                        conf[3:].lower() : value
+                    }
+                )
 
         # クラスに渡されたパラメーターからの適用
         if self.CONFIG.dbConnect:
@@ -2274,12 +2271,19 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 )
 
         # ポート番号からライブラリの指定
-        if dbConnect['port'] == '5432':
-            dbConnect['library'] = 'psycopg2'
-        elif dbConnect['port'] == '3306':
-            dbConnect['library'] = 'pymysql'
+        if self.CONFIG.dbConnect['port'] == 5432:
+            self.CONFIG.dbConnect['library'] = 'psycopg2'
+        elif self.CONFIG.dbConnect['port'] == 3306:
+            self.CONFIG.dbConnect['library'] = 'pymysql'
         else:
-            dbConnect['library'] = 'sqlite3'
+            self.CONFIG.dbConnect['library'] = 'sqlite3'
+        # モジュール読み込み
+        try:
+            import importlib
+            self.dbConnector = importlib.import_module(self.CONFIG.dbConnect.get('library'))
+        except Exception as e:
+            return (False, 'DB Connector: Initialize, Failed. %s' % e)
+
 
     def changePassword(self, *auth):
         '''
@@ -2393,7 +2397,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     permit = 'roleid'
                 else:
                     permit = 'type'
-                if int(data.get(permit)) != ZABBIX_SUPER_ROLE:
+                if int(data.get(permit, -1)) != ZABBIX_SUPER_ROLE:
                     return (False, 'Failed, firstProcess Notified User Permission is not SuperAdministorator.')
 
         if self.checkMasterNode():
@@ -2638,15 +2642,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             return (False, 'No Exist DB Connection Config.')
         dbConnect = self.CONFIG.dbConnect
 
-        # モジュール読み込み
-        try:
-            import importlib
-            dbconnector = importlib.import_module(dbConnect.get('library'))
-        except:
-            return (False, 'DB Connector: Initialize, Failed.')
-
         # 操作実行
-        with dbconnector.connect(
+        with self.dbConnector.connect(
             host=dbConnect['host'],
             port=dbConnect['port'],
             database=dbConnect['name'],
@@ -2658,9 +2655,9 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     # 取得 
                     try:
                         cursor.execute('select * from %s' % table)
-                        table_data = [[c[0] for c in cursor.description]]
-                        [table_data.append(l) for l in cursor.fetchall()]
-                        result = (True, table_data)
+                        tableData = [[c[0] for c in cursor.description]]
+                        [tableData.append(l) for l in cursor.fetchall()]
+                        result = (True, tableData)
                     except:
                         result = (False, 'DB Direct Select %s, Failed.' % table)
                 else:
@@ -2679,35 +2676,35 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             result = (False, 'DB Direct Delete All data on %s, Failed.' % table)
                         try:
                             # ヘッダー生成
-                            head = ','.join(table_data[0])
+                            head = ','.join(tableData[0])
                             # 1行ずつSQL生成＆実行
-                            for row in table_data[1:]:
+                            for row in tableData[1:]:
                                 row = '\'' + '\',\''.join(map(str, row)) + '\''
                                 sql = 'INSERT INTO %s (%s) VALUES (%s)' % (table, head, row)
                                 cursor.execute(sql)
                             result = ZC_COMPLETE
-                        except:
-                            result = (False, 'DB Direct Insert into %s, Failed.' % table)
+                        except Exception as e:
+                            result = (False, 'DB Direct Insert into %s, Failed. %s' % (table, e))
                     elif operate == 'update':
                         # 更新
-                        if len(table_data) != 2:
+                        if len(tableData) != 2:
                             result = ('False', 'Wrong Data for %s' % table)
-                        elif len(table_data[0]) != len(table_data[1]):
+                        elif len(tableData[0]) != len(tableData[1]):
                             result = ('False', 'Wrong Head/Data length for %s' % table)
                         else:
                             try:
                                 # 更新対象
-                                where = '%s = \'%s\'' % (table_data[0][0], table_data[1][0])
+                                where = '%s = \'%s\'' % (tableData[0][0], tableData[1][0])
                                 update = ''
                                 # 更新対象の生成
-                                for col in range(1, len(table_data[1])):
-                                    update += '%s = \'%s\', ' % (table_data[0][col], table_data[1][col])
+                                for col in range(1, len(tableData[1])):
+                                    update += '%s = \'%s\', ' % (tableData[0][col], tableData[1][col])
                                 # SQL実行
                                 sql = 'UPDATE %s SET %s WHERE %s' % (table, update.strip(', '), where)
                                 cursor.execute(sql)
                                 result = ZC_COMPLETE
                             except Exception as e:
-                                result = (False, 'DB Direct Update %s, Failed.' % table)
+                                result = (False, 'DB Direct Update %s, Failed. %s' % (table, e))
                     else:
                         result = (False, 'No Operate.')
                     # 問題なければコミット
@@ -3590,7 +3587,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             permit = 'role'
             permitId = self.getKeynameInMethod(permit, 'id')
         else:
-            permit = 'type'
+            permit = permitId = 'type'
         items = []
         deleteTarget = []
         try:
@@ -3992,13 +3989,14 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         # 6.0以前のマスターノードならばデータベース操作でデータ取得
         if self.checkMasterNode and self.VERSION['major'] < 6.0:
             try:
+                self.LOCAL['database'] = {}
                 for table in self.sections['DB_DIRECT']:
-                    result = self.getDbData(table)
-                    if result[0]:
+                    res = self.getDbData(table)
+                    if res[0]:
                         self.LOCAL['database'][table] = {
                             'ZABBIX_ID': None,
                             'NAME': table,
-                            'DATA': result[1]
+                            'DATA': res[1]
                         }
             except Exception as e:
                 result = (False, 'Failed, getDataFromZabbix/DBDirect. %s' % e)
@@ -4321,13 +4319,12 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
 
         else:
             # 6.0以前のDB Direct操作
-            for table in self.sections['DB_DIRECT']:
-                data = self.STORE['database'][table]
-                if not data:
+            for tableData in self.STORE.get('database', []):
+                if not tableData:
                     # 入れ替えるデータがない
-                    result = (True, 'No Exist DB_DIRECT table: %s.' % table)
-                    continue
-                data = data[0]
+                    result = (True, 'No Exist DB_DIRECT data.')
+                table = tableData['NAME']
+                data = tableData['DATA']
                 if table == 'config':
                     # col名変更対応
                     for ver, renames in self.dbConfigRenameCols.items():
@@ -4491,7 +4488,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             # インポートエラーが一つでも出ると全部巻き込まれるので、１つずつ入れることにした
             count = 0
             while len(items) > count:
-                if self.VERSION['major'] in [6.2, 6.4]:
+                if self.VERSION['major'] in [5.0, 6.2, 6.4]:
                     # trigger prototype内の依存関係以外はこれで入る
                     self.importRules['triggers']['createMissing'] = False
                     importData.append({'templates': [items[count]]})
@@ -4556,7 +4553,6 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             # 7.0対応
             if self.getLatestVersion('MASTER_VERSION') >= 7.0:
                 importItems.pop('date', None)
-
             # インポート内容のJSONテキスト化
             try:
                 importItems = '{"zabbix_export":%s}' % json.dumps(importItems, ensure_ascii=False)
@@ -5919,7 +5915,7 @@ def inputParameters():
         help='Zabbix DB名（Zabbix6.0未満対応）'
     )
     databaseGroup.add_argument(
-        '-dbport', '--db-connect-type',
+        '-dbtype', '--db-connect-type',
         choices=['pgsql', 'mysql'],
         help='Zabbix DB種別（Zabbix6.0未満対応）'
     )
@@ -5938,11 +5934,10 @@ def inputParameters():
             continue
         if re.match('^[a-z]*_connect_', parse):
             parse = parse.split('_')
-            params['_'.join(parse[:2])].update(
-                {
-                    '_'.join(parse[2:]): value
-                }
-            )
+            connect = '_'.join(parse[:2])
+            if not params.get(connect):
+                params[connect] = {}
+            params[connect].update({parse[-1]: value})
         else:
             params.update({parse: value})
     return params

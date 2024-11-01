@@ -104,6 +104,9 @@ Required Python Library:
 
 Required extra libraries for Versions before Zabbix 6.0.
 
+* PostgreSQL: psycopg2 (psycopg2-binary)
+* MySQL/MariaDB: pymysql
+
 ## Supported Zabbix Configuration
 
 * hostgroup
@@ -824,7 +827,7 @@ It is currently unknown if changes to trigger expressions (Zabbix5.4 or later) c
 |5.0|6.0|N/A|?|?|?|?|
 |5.0|5.4|N/A|?|?|?|?|
 |5.0|5.2|N/A|||||
-|5.0|5.0|N/A|||||
+|5.0|5.0|N/A|OK|-|-|-|
 |4.0|5.0|N/A|||||
 |4.0|4.4|N/A|||||
 |4.0|4.2|N/A|||||
