@@ -3303,9 +3303,12 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             return (True, 'No Data, proxygroup.')
 
         deleteTarget = []
-        # 削除対象がある場合
-        if not self.checkMasterNode():
-            # ワーカー側削除対象
+        if self.checkMasterNode():
+            # マスターノード処理
+            pass
+        else:
+            # ワーカーノード処理
+            # 自身が対象ではなくなったプロキシグループの削除
             names = [item['NAME'] for item in self.STORE.get('proxygroup', [])]
             for name, item in self.LOCAL.get('proxygroup', {}).items():
                 if name not in names:
@@ -3336,9 +3339,6 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         try:
             for item in self.STORE['drule'].copy():
                 data = item['DATA']
-                for param in data.copy().keys():
-                    if param in self.discardParameter['drule']:
-                        data.pop(param, None)
                 # プロキシの変換
                 # 7.0でプロキシグループに対応していないので、7.2以降変更の可能性あり
                 idRename = None
@@ -3361,9 +3361,14 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 else:
                     data[idName] = id
                 if self.checkMasterNode():
+                    # マスターノード処理
+                    pass
+                else:
+                    # ワーカーノード処理
+                    # 不要データの削除
+                    [data.pop(param, None) for param in self.discardParameter['drule']]
                     # 7.0対応
                     data.pop('error', None)
-                    # 不要データの削除
                     for check in data['dchecks']:
                         dType = int(check['type'])
                         # ID系は共通で削除
@@ -3413,13 +3418,14 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         deleteTarget = []
         try:
             for item in self.STORE.get('sla', []).copy():
+                data = item['DATA']
                 if self.checkMasterNode():
-                    data = item['DATA']
-                    # 加工するのはmaterノードのみ
+                    # マスターノード処理
+                    pass
+                else:
+                    # ワーカーノード処理
                     # 空データの削除
-                    for param in self.discardParameter['sla']:
-                        if not data.get(param):
-                            data.pop(param, None)
+                    [data.pop(param, None) for param in self.discardParameter['sla'] if not data.get(param)]
                 items.append(item)
         except Exception as e:
             result = (False, 'processingSla: %s' % e)
@@ -3453,13 +3459,13 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 data = item['DATA']
                 if self.checkMasterNode():
                     # masterノード処理
-                    # read-onlyの削除
-                    [data.pop(param, None) for param in self.discardParameter['service']]
                     # parents/childrenのnameの中身のみのリスト化
                     data['parents'] = [parent['name'] for parent in data['parents']]
                     data['children'] = [child['name'] for child in data['children']]
                 else:
                     # ワーカーノード処理
+                    # read-onlyの削除
+                    [data.pop(param, None) for param in self.discardParameter['service']]
                     # サービス関連性の抜きだし
                     extend.append(
                         {
@@ -3593,15 +3599,16 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             for item in self.STORE['user'].copy():
                 data = item['DATA']
                 if self.checkMasterNode():
+                    # 所属Usergroup処理 idNameがこのメソッドだけの特殊名
+                    # usrgrps:[]の中を{'name': 'xxxx'}のバリューだけにする
+                    idName = 'usrgrps'
+                    usrgrps = data.pop(idName, [])
+                    data[idName] = [grp.get('name') for grp in usrgrps]
+                else:
                     # 7.0対応
                     if int(data.pop('userdirectoryid', 0)):
                         # LDAP/SAML認証で生成されたユーザーは除外
                         continue
-                    # 所属Usergroup処理
-                    # usrgrps:[]の中を{'name': 'xxxx'}のバリューだけにする
-                    usrgrps = data.pop('usrgrps', [])
-                    data['usrgrps'] = [grp.get('name') for grp in usrgrps]
-                else:
                     # 5.2対応
                     if self.getLatestVersion('MASTER_VERSION') >= 5.2:
                         # roleID変換
@@ -3622,7 +3629,10 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         if data[permitId] == ZABBIX_SUPER_ROLE:
                             continue
                     # 複製許可ユーザーの確認
-                    idName = self.getKeynameInMethod('user', 'name') if self.getLatestVersion('MASTER_VERSION') >= 5.4 else 'alias'
+                    if self.getLatestVersion('MASTER_VERSION') >= 5.4:
+                        idName = self.getKeynameInMethod('user', 'name')
+                    else:
+                        idName = 'alias'
                     password = self.CONFIG.enableUser.get(data[idName])
                     if not password:
                         continue
@@ -3687,20 +3697,17 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         try:
             for item in self.STORE['usergroup'].copy():
                 data = item['DATA']
-                # 6.2対応
-                if self.VERSION['major'] >= 6.2:
-                    # 0の場合不要
-                    if not int(data.get('userdirectoryid', 0)):
-                        data.pop('userdirectoryid', None)
-                    # 内部認証（１）とフロントエンドアクセス禁止（３）では不要
-                    if int(data.get('gui_access')) in [1, 3]:
-                        data.pop('userdirectoryid', None)
-                # 7.0対応
-                if self.VERSION['major'] >= 7.0:
-                    # MFAを使わないのであれば不要
-                    if not data.get('mfa_status'):
-                        data.pop('mfa_status', None)
-                        data.pop('mfaid', None)
+                # 共通
+                # tag_filtersのgroupidを変換
+                idName = self.getKeynameInMethod('hostgroup', 'id')
+                for tag in data.get('tag_filters', []):
+                    [
+                        tag.update(
+                            {
+                                idName: self.replaceIdName('hostgroup', tag[idName])
+                            }
+                        )
+                    ]
                 # rightsのidを変換
                 # 6.2対応
                 if self.VERSION['major'] >= 6.2:
@@ -3733,48 +3740,58 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                                     'permission': val['permission']
                                 }
                             )
-                # tag_filtersのgroupidを変換
-                if not data.get('tag_filters'):
-                    # 空の場合は項目を消す
-                    data.pop('tag_filters', None)
-                else:
-                    method = 'hostgroup'
-                    idName = self.getKeynameInMethod(method, 'id')
-                    [
-                        tag.update(
-                            {
-                                idName: self.replaceIdName(method, tag[idName])
-                            }
-                        ) for tag in data['tag_filters']
-                    ]
                 # useridsの変換
                 # 6.0対応 userids:[id,...] -> users:[{'userid': id},...]
                 if self.VERSION['major'] >= 6.0:
                     uKey = 'users'
-                    if self.getLatestVersion('MASTER_VERSION') < 6.0 and not self.checkMasterNode():
-                        # 5.4以前のデータでワーカー側の処理
-                        users = data.pop('userids', [])
-                    else:
-                        users = data.pop(uKey, [])
-                        # IDのみリストに変換
-                        users = [user['userid'] for user in users]
-                    data[uKey] = []
                     idName = self.getKeynameInMethod('user', 'id')
-                    for user in users:
-                        user = self.replaceIdName('user', user)
-                        if user:
-                            data[uKey].append({idName: user})
+                    if self.checkMasterNode():
+                        pass
+                    else:
+                        # ワーカーノード処理
+                        # 6.0対応
+                        if self.getLatestVersion('MASTER_VERSION') >= 6.0:
+                            users = data.pop(uKey, [])
+                            # IDのみリストに変換
+                            users = [user['userid'] for user in users]
+                        else:
+                            users = data.pop('userids', [])
                 else:
                     uKey = 'userids'
+                    idName = None
                     users = data.pop(uKey, [])
-                    data[uKey] = []
-                    for user in users:
-                        user = self.replaceIdName('user', user)
-                        if user:
-                            data[uKey].append(user)
-                if not data[uKey]:
-                    # 空の場合は項目を消す
-                    data.pop(uKey)
+                data[uKey] = []
+                for user in users:
+                    user = self.replaceIdName('user', user)
+                    if user:
+                        data[uKey].append(
+                            {idName: user} if self.VERSION['major'] >= 6.0 else user
+                        )
+                if self.checkMasterNode():
+                    # マスターノード処理
+                    pass
+                else:
+                    # ワーカーノード処理
+                    # 6.2対応
+                    if self.VERSION['major'] >= 6.2:
+                        # 0の場合不要
+                        if not int(data.get('userdirectoryid', 0)):
+                            data.pop('userdirectoryid', None)
+                        # 内部認証（１）とフロントエンドアクセス禁止（３）では不要
+                        if int(data.get('gui_access')) in [1, 3]:
+                            data.pop('userdirectoryid', None)
+                    # 7.0対応
+                    if self.VERSION['major'] >= 7.0:
+                        # MFAを使わないのであれば不要
+                        if not data.get('mfa_status'):
+                            data.pop('mfa_status', None)
+                            data.pop('mfaid', None)
+                    if not data[uKey]:
+                        # 空の場合は項目を消す
+                        data.pop(uKey)
+                    if not data.get('tag_filters'):
+                        # 空の場合は項目を消す
+                        data.pop('tag_filters', None)
                 items.append(item)
         except Exception as e:
             return (False, 'processingUsergroup: %s' % e)
@@ -3793,8 +3810,11 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         try:
             for item in self.STORE['role'].copy():
                 data = item['DATA']
-                if not self.checkMasterNode():
-                    # ワーカーノード側
+                if self.checkMasterNode():
+                    # マスターノード処理
+                    pass
+                else:
+                    # ワーカーノード処理
                     # 不要項目を削除
                     for param in data.copy().keys():
                         if param in self.discardParameter['role']:
@@ -3859,9 +3879,6 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             provMedia[idName] = id
                         else:
                             data['provision_media'].pop(provMedia, None)
-                    # 割り当てメディア設定が空になっていたら削除
-                    if len(data['provison_media']) == 0:
-                        data.pop('provison_media', None)
                 if data.get('provision_groups'):
                     for provUgroup in data['provision_groups'].copy():
                         # roleのID変換
@@ -3879,8 +3896,16 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         # ユーザーグループが空になっていたら設定内リストから削除
                         if len(provUgroup['user_group']) == 0:
                             data['provision_groups'].remove(provUgroup)
+                if self.checkMasterNode():
+                    # マスターノード処理
+                    pass
+                else:
+                    # ワーカーノード処理
+                    # 割り当てメディア設定が空になっていたら削除
+                    if not data.get('provison_media'):
+                        data.pop('provison_media', None)
                     # 割り当てグループ設定が空になっていたら削除
-                    if len(data['provision_groups']) == 0:
+                    if not data.get('provision_groups'):
                         data.pop('provision_groups', None)
                 items.append(item)
         except Exception as e:
@@ -3902,6 +3927,10 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 data = item['DATA']
                 mfaType = int(data['type'])
                 if self.checkMasterNode():
+                    # マスターノード処理
+                    pass
+                else:
+                    # ワーカーノード処理
                     # typeごとに不要な要素は削除
                     if mfaType == 1:
                         # TOTP
@@ -3912,10 +3941,6 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         # Duo Universal Prompt
                         data.pop('hash_function', None)
                         data.pop('code_length', None)
-                    else:
-                        continue
-                else:
-                    if mfaType == 2:
                         # Duo Universal Promptのシークレットは設定から読み込む
                         name = data[self.getKeynameInMethod('mfa', 'name')]
                         secret = self.CONFIG.mfaClientSecret.get(name)
@@ -3923,6 +3948,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             data['client_secret'] = secret
                         else:
                             continue
+                    else:
+                        continue
                 items.append(item)
         except Exception as e:
             return (False, 'processingMfa: %s' % e)
@@ -3939,19 +3966,20 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         if not self.STORE.get('authentication'):
             return (True, 'No Data, authentication')
         
-        if self.checkMasterNode():
-            # LDAP/SAMLで使うdisabled_usrgrpidのID変換
-            for item in self.STORE['authentication']:
-                data = item['DATA']
-                if item['NAME'] == 'disabled_usrgrpid':
-                    id = self.replaceIdName('usergroup', data['disabled_usrgrpid'])
-                    if id:
-                        data['disabled_usrgrpid'] = id
+        for item in self.STORE['authentication']:
+            data = item['DATA']
+            if item['NAME'] == 'disabled_usrgrpid':
+                # LDAP/SAMLで使うdisabled_usrgrpidのID変換
+                id = self.replaceIdName('usergroup', data['disabled_usrgrpid'])
+                if id:
+                    data['disabled_usrgrpid'] = id
+            elif item['NAME'] == 'mfaid':
                 # MFAのデフォルト利用のID変換
-                if item['NAME'] == 'mfaid':
-                    id = self.replaceIdName('mfa', data['mfaid'])
-                    if id:
-                        data['mfaid'] = id
+                id = self.replaceIdName('mfa', data['mfaid'])
+                if id:
+                    data['mfaid'] = id
+            else:
+                pass
 
         return ZC_COMPLETE
 
