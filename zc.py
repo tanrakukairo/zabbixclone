@@ -930,7 +930,6 @@ class ZabbixCloneParameter():
             methodParameters['user']['options']['output'] = ['username', 'roleid']
             # valuemapのホスト／テンプレート内への埋め込みによる項目削除（インポートルールは継続）
             sections['CONFIG_EXPORT'].pop('valuemap', None)
-            sections['CONFIG_IMPORT'][4.0].pop('value_maps', None)
             # application/screens廃止に伴うインポートルールの削除
             importRules.pop('applications', None)
             importRules.pop('screens', None)
@@ -1006,6 +1005,8 @@ class ZabbixCloneParameter():
             sections['GLOBAL'].extend(['settings', 'authentication'])
             sections['PRE'].append('regexp')
             sections['POST'].extend(['service', 'sla'])
+            # 5.4がインポートに必要っぽい？
+            sections['CONFIG_IMPORT'][4.0].pop('value_maps', None)
             # グローバル設定と正規表現のAPI対応に伴うDBのダイレクト操作の廃止
             sections.pop('DB_DIRECT', None)
             discardParameter.update(
@@ -3012,69 +3013,74 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         try:
             for item in self.STORE['script'].copy():
                 data = item['DATA']
-                targets = ['usergroup']
-                scriptType = int(data['type'])
-                scope = int(data.get('scope', 0))
-                # 5.4対応
-                if self.VERSION['major'] >= 5.4:
-                    targets.append('hostgroup')
-                    # Webhook script用パラメーターの削除
-                    if scriptType != 0:
-                        # Scriptではない
-                        data.pop('execute_on', None)
-                    if scriptType != 2:
-                        # SSHではない
-                        data.pop('authtype', None)
-                        data.pop('publickey', None)
-                        data.pop('privatekey', None)
-                        if scriptType != 3:
-                            # Telnetでもない
-                            data.pop('username', None)
-                            data.pop('password', None)
-                            data.pop('port', None)
-                    else:
-                        # SSH/Telnetである
-                        if int(data['authtype']) == 0:
-                            # パスワード認証である
-                            data.pop('publickey', None)
-                            data.pop('privatekey', None)
-                        else:
-                            # 鍵認証である
-                            data.pop('password', None)
-                    if scriptType != 5:
-                        # Wehhooではない
-                        data.pop('timeout', None)
-                        data.pop('parameters', None)
-                    if scope not in [2, 4]:
-                        # スコープがmanual host action/manual event actionではない
-                        data.pop('menu_path', None)
-                        data.pop('usrgrpid', None)
-                        data.pop('host_access', None)
-                        data.pop('confirmation', None)
-
-                for method in targets:
+                # 共通処理
+                # ID変換
+                for method in ['usergroup', 'hostgroup']:
                     idName = self.getKeynameInMethod(method, 'id')
                     if data.get(idName):
                         data[idName] = self.replaceIdName(method, data[idName])
-                # 6.4対応
-                if self.VERSION['major'] >= 6.4:
-                    # URL用パラメーターの削除
-                    if scriptType != 6:
-                        data.pop('url', None)
-                        data.pop('new_window', None)
-                # 7.0 対応
-                if self.VERSION['major'] >= 7.0:
-                    # スコープがmanual host action/manual event actionではない
-                    # またはmanualinputが0である
-                    if scope not in [2, 4] or int(data.get('manualinput', 0)) == 0:
-                        data.pop('manualinput', None)
-                        data.pop('manualinput_prompt', None)
-                        data.pop('manualinput_validator', None)
-                        data.pop('manualinput_validator_type', None)
-                        data.pop('manualinput_default_value', None)
-                    else:
-                        if int(data.get('manualinput_validator_type', 0)) == 1:
+
+                if self.checkMasterNode():
+                    # マスターノード処理
+                    pass
+                else:
+                    # ワーカーノード処理
+                    scriptType = int(data['type'])
+                    scope = int(data.get('scope', 0))
+                    # 5.4対応
+                    if self.VERSION['major'] >= 5.4:
+                        # Webhook script用パラメーターの削除
+                        if scriptType != 0:
+                            # Scriptではない
+                            data.pop('execute_on', None)
+                        if scriptType != 2:
+                            # SSHではない
+                            data.pop('authtype', None)
+                            data.pop('publickey', None)
+                            data.pop('privatekey', None)
+                            if scriptType != 3:
+                                # Telnetでもない
+                                data.pop('username', None)
+                                data.pop('password', None)
+                                data.pop('port', None)
+                        else:
+                            # SSH/Telnetである
+                            if int(data['authtype']) == 0:
+                                # パスワード認証である
+                                data.pop('publickey', None)
+                                data.pop('privatekey', None)
+                            else:
+                                # 鍵認証である
+                                data.pop('password', None)
+                        if scriptType != 5:
+                            # Wehhooではない
+                            data.pop('timeout', None)
+                            data.pop('parameters', None)
+                        if scope not in [2, 4]:
+                            # スコープがmanual host action/manual event actionではない
+                            data.pop('menu_path', None)
+                            data.pop('usrgrpid', None)
+                            data.pop('host_access', None)
+                            data.pop('confirmation', None)
+                    # 6.4対応
+                    if self.VERSION['major'] >= 6.4:
+                        # URL用パラメーターの削除
+                        if scriptType != 6:
+                            data.pop('url', None)
+                            data.pop('new_window', None)
+                    # 7.0 対応
+                    if self.VERSION['major'] >= 7.0:
+                        # スコープがmanual host action/manual event actionではない
+                        # またはmanualinputが0である
+                        if scope not in [2, 4] or int(data.get('manualinput', 0)) == 0:
+                            data.pop('manualinput', None)
+                            data.pop('manualinput_prompt', None)
+                            data.pop('manualinput_validator', None)
+                            data.pop('manualinput_validator_type', None)
                             data.pop('manualinput_default_value', None)
+                        else:
+                            if int(data.get('manualinput_validator_type', 0)) == 1:
+                                data.pop('manualinput_default_value', None)
                 items.append(item)
         except Exception as e:
             result = (False, 'processingScript: %s' % e)
@@ -3581,42 +3587,43 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         if not self.STORE.get('user'):
             return (True, 'No Data, user')
         
-        # 5.2対応
-        if self.VERSION['major'] >= 5.2:
-            # roleID変換
-            permit = 'role'
-            permitId = self.getKeynameInMethod(permit, 'id')
-        else:
-            permit = permitId = 'type'
         items = []
         deleteTarget = []
         try:
             for item in self.STORE['user'].copy():
                 data = item['DATA']
-                # 権限がtypeではない場合
-                if permit != 'type':
-                    data[permitId] = self.replaceIdName(permit, data[permitId])
-                # 不要項目削除
-                data.pop('users_status', None)
-                data.pop('gui_access', None)
-                data.pop('debug_mode', None)
-                # 7.0対応
-                if int(data.pop('userdirectoryid', 0)):
-                    # LDAP/SAML認証で生成されたユーザーは除外
-                    continue
-                # 所属Usergroup処理
                 if self.checkMasterNode():
+                    # 7.0対応
+                    if int(data.pop('userdirectoryid', 0)):
+                        # LDAP/SAML認証で生成されたユーザーは除外
+                        continue
+                    # 所属Usergroup処理
                     # usrgrps:[]の中を{'name': 'xxxx'}のバリューだけにする
-                    usrgrps = data.pop('usrgrps')
+                    usrgrps = data.pop('usrgrps', [])
                     data['usrgrps'] = [grp.get('name') for grp in usrgrps]
                 else:
+                    # 5.2対応
+                    if self.getLatestVersion('MASTER_VERSION') >= 5.2:
+                        # roleID変換
+                        permit = 'role'
+                        permitId = self.getKeynameInMethod(permit, 'id')
+                    else:
+                        permit = permitId = 'type'
+
+                    # 権限がtypeではない場合
+                    if permit != 'type':
+                        data[permitId] = self.replaceIdName(permit, data[permitId])
+                    # 不要項目削除
+                    data.pop('users_status', None)
+                    data.pop('gui_access', None)
+                    data.pop('debug_mode', None)
                     # 特権管理者の複製許可確認
                     if not self.CONFIG.cloningSuperAdmin:
                         if data[permitId] == ZABBIX_SUPER_ROLE:
                             continue
                     # 複製許可ユーザーの確認
-                    name = data[self.getKeynameInMethod('user', 'name')]
-                    password = self.CONFIG.enableUser.get(name)
+                    idName = self.getKeynameInMethod('user', 'name') if self.getLatestVersion('MASTER_VERSION') >= 5.4 else 'alias'
+                    password = self.CONFIG.enableUser.get(data[idName])
                     if not password:
                         continue
                     # パスワード設定を新規作成ユーザーに追加、既存ユーザーはパスワード変更はできない（元がわからない）
@@ -4488,11 +4495,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             # インポートエラーが一つでも出ると全部巻き込まれるので、１つずつ入れることにした
             count = 0
             while len(items) > count:
-                if self.VERSION['major'] in [5.0, 6.2, 6.4]:
-                    # trigger prototype内の依存関係以外はこれで入る
-                    self.importRules['triggers']['createMissing'] = False
-                    importData.append({'templates': [items[count]]})
-                else:
+                if self.VERSION['major'] in [6.0, 7.0]:
                     # 6.0/7.0だとこっちで依存関係のは問題なく全部入る
                     # なんで？？？？
                     importData.append(
@@ -4501,6 +4504,19 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             'triggers': triggers
                         }
                     )
+                elif self.VERSION['major'] == 5.4:
+                    # 5.0はvaluemapが別になっているので5.4はテンプレート側処理時に必要になる
+                    self.importRules['triggers']['createMissing'] = False
+                    importData.append(
+                        {
+                            'templates': [items[count]],
+                            'value_maps': importData[0]['value_maps']
+                        }
+                    )
+                else:
+                    # trigger prototype内の依存関係以外はこれで入る
+                    self.importRules['triggers']['createMissing'] = False
+                    importData.append({'templates': [items[count]]})
                 count += 1
 
         # マスターのバージョンが6.2未満でノード側が6.2以上の場合

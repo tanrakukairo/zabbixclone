@@ -825,8 +825,8 @@ It is currently unknown if changes to trigger expressions (Zabbix5.4 or later) c
 |6.0|6.2|N/A|OK?|-|-|-|
 |6.0|6.0|N/A|OK|-|-|-|
 |5.0|6.0|N/A|?|?|?|?|
-|5.0|5.4|N/A|?|?|?|?|
-|5.0|5.2|N/A|||||
+|5.0|5.4|N/A|OK|-|-|-|
+|5.0|5.2|N/A|OK|-|-|-|
 |5.0|5.0|N/A|OK|-|-|-|
 |4.0|5.0|N/A|||||
 |4.0|4.4|N/A|||||
