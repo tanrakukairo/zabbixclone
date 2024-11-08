@@ -2839,20 +2839,51 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         discardOperate = ['esc_period', 'esc_step_from', 'esc_step_to']
         discardNotTriggerAction = ['pause_symptoms', 'pause_suppressed', 'notify_if_canceled']
 
+
         items = []
         try:
             for item in self.STORE['action'].copy():
                 data = item['DATA']
-                eventSource = int(data['eventsource'])
                 # 有効でないアクションは除外
                 if data['status'] == ZABBIX_DISABLE:
                     continue
+
+                # キー名ゆれ対応
+                operateType = ['operations', 'recoveryOperations', 'acknowledgeOperations']
+                for target in operateType.copy():
+                    if target != 'operations':
+                        targetData = data.pop(target, None)
+                        # get/create間表記ゆれ対応（O -> _o）
+                        rename = target.replace('O', '_o')
+                        if not targetData:
+                            targetData = data.pop(rename, None)
+                        # 6.0対応
+                        if self.VERSION['major'] >= 6.0:
+                            rename = rename.replace('acknowledge', 'update')
+                        if not targetData:
+                            targetData = data.pop(target, None)
+                        if targetData:
+                            data[rename] = targetData
+                        # 入れ替え
+                        operateType.remove(target)  
+                        operateType.append(rename)
+
+                eventSource = int(data['eventsource'])
                 # トリガーアクション以外で不要なものの削除
                 if eventSource != 0:
                     [data.pop(param, None) for param in discardNotTriggerAction]
+                # アップデートはトリガー/サービスアクションでのみ使用
+                if eventSource in [1, 2, 3]:
+                    data.pop('update_operations', None)
+                    data.pop('updateOperations', None)
+                    data.pop('acknowledge_operations', None)
+                    data.pop('acknowledgeOperations', None)
                 # ネットワークディスカバリと自動登録で不要なものの削除
                 if eventSource in [1, 2]:
+                    data.pop('recovery_operations', None)
+                    data.pop('recoveryOperations', None)
                     data.pop('esc_period', None)
+
                 # ZABBIXが動的に付けるのでeval_formulaを削除する
                 data['filter'].pop('eval_formula', None)
                 # 計算式を自動にしているならformulaを削除
@@ -2892,55 +2923,31 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         }
                     )
 
-                operateType = [
-                    'operations',
-                    'recoveryOperations',
-                    'acknowledgeOperations'
-                ]
-                for target in operateType.copy():
-                    if target != 'operations':
-                        targetData = data.pop(target, None)
-                        if not targetData:
-                            continue
-                        # get/create間表記ゆれ対応（O -> _o）
-                        rename = target.replace('O', '_o')
-                        # 6.0対応 acknowledge->update
-                        if self.VERSION['major'] >= 6.0:
-                            rename = rename.replace('acknowledge', 'update')
-                        data[rename] = targetData
-                        # 入れ替え
-                        operateType.remove(target)  
-                        operateType.append(rename)
-
-                # ID変換実行
+                # 変換
                 for target in operateType:
-                    exclude = target.removesuffix('_operations')
-                    # アップデートはトリガー/サービスアクションでのみ使用
-                    if exclude in ['update', 'acknowledge'] and eventSource in [1, 2, 3]:
+                    if not data.get(target):
                         data.pop(target, None)
                         continue
-                    # 自動登録ではリカバリーは不要なので削除
-                    if exclude == 'recovery' and eventSource in [1, 2]:
-                        data.pop(target, None)
-                        continue
-                    for operate in data.get(target, []):
+                    for operate in data[target]:
+                        # 不要データの削除
                         # 空データの削除
                         [operate.pop(param, None) for param in operate.copy().keys() if not operate.get(param)]
+                        # ZABBIXが自動的に付けるIDを削除
+                        [operate.pop(param, None) for param in readOnly]
                         # トリガーアクション以外では不要なものの削除
                         if eventSource != 0:
                             operate.pop('evaltype', None)
                         # ネットワークディスカバリと自動登録で不要なものの削除
                         if eventSource in [1, 2]:
                             [operate.pop(param, None) for param in discardOperate]
-                        # ZABBIXが自動的に付けるIDを削除
-                        [operate.pop(param, None) for param in readOnly]
                         # 更新と復帰の処理
                         if target != 'operations':
                             # 6.0以前でここにある条件式は削除
                             operate.pop('evaltype', None)
                             # 全メディア通知の場合、メッセージ設定されている場合はメディアIDを削除
-                            if operate.get('operationtype') == '11':
+                            if int(operate.get('operationtype')) == 11:
                                 operate['opmessage'].pop('mediatypeid', None)
+                        # オペレーション内容の処理
                         for op in operate.copy().keys():
                             opData = operate.get(op)
                             if not opData:
@@ -2948,11 +2955,12 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                                 operate.pop(op)
                                 continue
                             if isinstance(opData, dict):
+                                # 辞書型データの処理
                                 # 実行内容がないものを削除
                                 [opData.pop(param, None) for param in opData.copy().keys() if not opData.get(param)]
-                                # アクション実行内容から不要IDを削除
+                                # 削除対象
                                 [opData.pop(param, None) for param in readOnly]
-                                # 辞書型のデータ内にあるIDの変換
+                                # ID変換
                                 for param in opData.copy().keys():
                                     method = self.getMethodFromIdname(param)
                                     if not method:
@@ -2962,15 +2970,17 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                                         continue
                                     opData[param] = trans
                             elif isinstance(opData, list):
+                                # リスト型データの処理
                                 transData = []
                                 for opd in opData:
                                     if not isinstance(opd, dict):
-                                        # 全部Dictのはず
+                                        # 要素は全部Dictのはず
                                         continue
                                     for param in opd.keys():
-                                        # 削除対象IDの処理
+                                        # 削除対象
                                         if param in readOnly:
                                             continue
+                                        # ID変換
                                         method = self.getMethodFromIdname(param)
                                         trans = self.replaceIdName(method, opd[param])
                                         if trans is None:
@@ -2978,7 +2988,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                                         transData.append({param: trans})
                                 opData = transData
                             else:
-                                # dictでもlistでもないのは変換の必要がない
+                                # dictでもlistでもないのは処理しない
                                 pass
                             if not opData:
                                 # 空になったものは捨てる
