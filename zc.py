@@ -3630,9 +3630,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 if self.VERSION['major'] >= 5.2:
                     permitMethod = 'role'
                     permit = self.getKeynameInMethod(permitMethod, 'id')
-                    if self.checkMasterNode():
-                        data[permit] = self.replaceIdName(permitMethod, data[permit])
-                    elif self.getLatestVersion('MASTER_VERSION') < 5.2:
+                    data[permit] = self.replaceIdName(permitMethod, data.get(permit))
+                    if not self.checkMasterNode() and self.getLatestVersion('MASTER_VERSION') < 5.2:
                         # 5.2以前は変換の必要がなかったので変換しないで代入
                         data[permit] = data.pop('type')
                 else:
