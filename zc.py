@@ -1005,8 +1005,6 @@ class ZabbixCloneParameter():
             sections['GLOBAL'].extend(['settings', 'authentication'])
             sections['PRE'].append('regexp')
             sections['POST'].extend(['service', 'sla'])
-            # 5.4がインポートに必要っぽい？
-            sections['CONFIG_IMPORT'][4.0].pop('value_maps', None)
             # グローバル設定と正規表現のAPI対応に伴うDBのダイレクト操作の廃止
             sections.pop('DB_DIRECT', None)
             discardParameter.update(
@@ -1060,6 +1058,8 @@ class ZabbixCloneParameter():
                 }
             )
             # インポートルール変更
+            # 6.0まで5.0からのインポートに必要なので6.2から不使用にする
+            sections['CONFIG_IMPORT'][4.0].pop('value_maps', None)
             value = importRules.pop('groups', None)
             importRules.update(
                 {
@@ -2133,7 +2133,10 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
 
         # Zabbix DB接続設定、6.0以降はDB直接接続は使用しない
         if self.VERSION['major'] < 6.0:
-            self.initDbConnect()
+            result = self.initDbConnect()
+            if not result[0]:
+                print(result[1])
+                sys.exit(3)
 
         # 継承クラスの初期化（ZabbixCloneParameter）
         ZabbixCloneParameter.__init__(self, self.VERSION)
@@ -2271,6 +2274,9 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     }
                 )
 
+        if not self.CONFIG.dbConnect:
+            return (False, 'DB Connector: No Exist Configurations.')
+
         # ポート番号からライブラリの指定
         if self.CONFIG.dbConnect['port'] == 5432:
             self.CONFIG.dbConnect['library'] = 'psycopg2'
@@ -2285,6 +2291,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         except Exception as e:
             return (False, 'DB Connector: Initialize, Failed. %s' % e)
 
+        return ZC_COMPLETE
 
     def changePassword(self, *auth):
         '''
@@ -2827,8 +2834,10 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         if not self.STORE.get('action'):
             return (True, 'No Data, action.')
 
-        # del_idはcreateでZABBIXがつけるのでデータから削除する
+        # createに不要なパラメータ―
         readOnly = self.discardParameter['action']
+        discardOperate = ['esc_period', 'esc_step_from', 'esc_step_to']
+        discardNotTriggerAction = ['pause_symptoms', 'pause_suppressed', 'notify_if_canceled']
 
         items = []
         try:
@@ -2840,9 +2849,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     continue
                 # トリガーアクション以外で不要なものの削除
                 if eventSource != 0:
-                    data.pop('pause_symptoms', None)
-                    data.pop('pause_suppressed', None)
-                    data.pop('notify_if_canceled', None)
+                    [data.pop(param, None) for param in discardNotTriggerAction]
                 # ネットワークディスカバリと自動登録で不要なものの削除
                 if eventSource in [1, 2]:
                     data.pop('esc_period', None)
@@ -2861,16 +2868,17 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     if self.VERSION['major'] >= 6.0:
                         if not custom_formula:
                             filter_item.pop('formulaid', None)
-                        if not filter_item.get('value2'):
-                            filter_item.pop('value2', None)
                         if not filter_item.get('value'):
                             filter_item.pop('value', None)
+                        if not filter_item.get('value2'):
+                            filter_item.pop('value2', None)
                     # ID変換対象メソッドを決定
-                    if filter_item['conditiontype'] == '0':
+                    condType = int(filter_item['conditiontype'])
+                    if condType == 0:
                         method = 'hostgroup'
-                    elif filter_item['conditiontype'] == '1':
+                    elif condType == 1:
                         method = 'host'
-                    elif filter_item['conditiontype'] == '13':
+                    elif condType == 13:
                         method = 'template'
                     else:
                         # 対応していない要素
@@ -2891,22 +2899,19 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 ]
                 for target in operateType.copy():
                     if target != 'operations':
-                        # 6.0以前のファンクション間表記ゆれ対応（O -> _o）
-                        trans = target.replace('O', '_o')
-                        # データのキー名変換
-                        if data.get(target) and not data.get(trans):
-                            data[trans] = data.pop(target)
-                        # 6.0以降対応、acknowledge->update
+                        targetData = data.pop(target, None)
+                        if not targetData:
+                            continue
+                        # get/create間表記ゆれ対応（O -> _o）
+                        rename = target.replace('O', '_o')
+                        # 6.0対応 acknowledge->update
                         if self.VERSION['major'] >= 6.0:
-                            if 'acknowledge' in trans:
-                                update = trans.replace('acknowledge', 'update')
-                                # データのキー名変換
-                                if data.get(trans) and not data.get(update):
-                                    data[update] = data.pop(trans)
-                                trans = update
+                            rename = rename.replace('acknowledge', 'update')
+                        data[rename] = targetData
                         # 入れ替え
                         operateType.remove(target)  
-                        operateType.append(trans)
+                        operateType.append(rename)
+
                 # ID変換実行
                 for target in operateType:
                     exclude = target.removesuffix('_operations')
@@ -2920,17 +2925,15 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         continue
                     for operate in data.get(target, []):
                         # 空データの削除
-                        [operate.pop(k, None) for k, v in operate.copy().items() if not v]
+                        [operate.pop(param, None) for param in operate.copy().keys() if not operate.get(param)]
                         # トリガーアクション以外では不要なものの削除
                         if eventSource != 0:
                             operate.pop('evaltype', None)
                         # ネットワークディスカバリと自動登録で不要なものの削除
                         if eventSource in [1, 2]:
-                            operate.pop('esc_period', None)
-                            operate.pop('esc_step_from', None)
-                            operate.pop('esc_step_to', None)
+                            [operate.pop(param, None) for param in discardOperate]
                         # ZABBIXが自動的に付けるIDを削除
-                        [operate.pop(k, None) for k in readOnly]
+                        [operate.pop(param, None) for param in readOnly]
                         # 更新と復帰の処理
                         if target != 'operations':
                             # 6.0以前でここにある条件式は削除
@@ -2938,45 +2941,49 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             # 全メディア通知の場合、メッセージ設定されている場合はメディアIDを削除
                             if operate.get('operationtype') == '11':
                                 operate['opmessage'].pop('mediatypeid', None)
-                        for opKey, ope in operate.copy().items():
-                            if not ope:
+                        for op in operate.copy().keys():
+                            opData = operate.get(op)
+                            if not opData:
                                 # アクション実行内容がないものは削除
-                                operate.pop(opKey)
+                                operate.pop(op)
                                 continue
-                            if isinstance(ope, dict):
+                            if isinstance(opData, dict):
                                 # 実行内容がないものを削除
-                                [ope.pop(k, None) for k, v in ope.copy().items() if not v]
+                                [opData.pop(param, None) for param in opData.copy().keys() if not opData.get(param)]
                                 # アクション実行内容から不要IDを削除
-                                [ope.pop(k, None) for k in readOnly]
+                                [opData.pop(param, None) for param in readOnly]
                                 # 辞書型のデータ内にあるIDの変換
-                                for key, value in ope.copy().items():
-                                    method = self.getMethodFromIdname(key)
+                                for param in opData.copy().keys():
+                                    method = self.getMethodFromIdname(param)
                                     if not method:
                                         continue
-                                    trans = self.replaceIdName(method, value)
+                                    trans = self.replaceIdName(method, opData[param])
                                     if trans is None:
                                         continue
-                                    ope.update({key: trans})
-                            elif isinstance(ope, list):
-                                rows = []
-                                for row in ope:
-                                    for key, value in row.items():
+                                    opData[param] = trans
+                            elif isinstance(opData, list):
+                                transData = []
+                                for opd in opData:
+                                    if not isinstance(opd, dict):
+                                        # 全部Dictのはず
+                                        continue
+                                    for param in opd.keys():
                                         # 削除対象IDの処理
-                                        if key in readOnly:
+                                        if param in readOnly:
                                             continue
-                                        method = self.getMethodFromIdname(key)
-                                        value = self.replaceIdName(method, value)
-                                        if value is None:
+                                        method = self.getMethodFromIdname(param)
+                                        trans = self.replaceIdName(method, opd[param])
+                                        if trans is None:
                                             continue
-                                    rows.append({key: value})
-                                ope = rows
+                                        transData.append({param: trans})
+                                opData = transData
                             else:
                                 # dictでもlistでもないのは変換の必要がない
                                 pass
-                            if not ope:
+                            if not opData:
                                 # 空になったものは捨てる
-                                operate.pop(opKey, None)
-                            operate.update({opKey: ope})
+                                operate.pop(op, None)
+                            operate[op] = opData
                 items.append(item)
         except Exception as e:
             result = (False, 'processingAction: %s' % e)
@@ -3219,7 +3226,6 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     for timeout in [param for param in data if re.match('timeout_', param)]:
                         if int(data.get('custom_timeouts', 0)) == 0 or not data.get(timeout):
                             data.pop(timeout, None)
-                    # プロキシの指定記述はdescriptionの先頭に「ZC_WORKER:node;」
                     mode = int(data.get('status', 5)) - 5
                     # 7.0対応
                     if self.VERSION['major'] >= 7.0:
@@ -3236,9 +3242,10 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             data['allowed_addresses'] = data.pop('proxy_address', None)
                             data['operating_mode'] = mode
                             data.pop('status', None)
-                    # ZC_NODEが無いまたは複数の記述があるプロキシは削除
                     desc = data.get('description', '')
-                    if len(re.findall(ZC_MONITOR_TAG + ':[0-9a-zA-Z-_.]*;', desc)) != 1:
+                    # プロキシの指定記述はdescriptionの先頭に「ZC_WORKER:node;」
+                    # ZC_WORKERが無いまたは複数の記述があるプロキシは削除
+                    if len(re.findall(ZC_MONITOR_TAG + ':[0-9a-zA-Z-_.]*', desc)) != 1:
                         continue
                     # Discriptionに自分のノード名が載ってないプロキシは削除
                     if not re.match(ZC_MONITOR_TAG + ':%s;' % self.CONFIG.node, desc):
@@ -3598,35 +3605,40 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         try:
             for item in self.STORE['user'].copy():
                 data = item['DATA']
-                if self.checkMasterNode():
-                    # 所属Usergroup処理 idNameがこのメソッドだけの特殊名
-                    # usrgrps:[]の中を{'name': 'xxxx'}のバリューだけにする
-                    idName = 'usrgrps'
-                    usrgrps = data.pop(idName, [])
-                    data[idName] = [grp.get('name') for grp in usrgrps]
-                else:
-                    # 7.0対応
-                    if int(data.pop('userdirectoryid', 0)):
-                        # LDAP/SAML認証で生成されたユーザーは除外
-                        continue
-                    # 5.2対応
-                    if self.getLatestVersion('MASTER_VERSION') >= 5.2:
-                        # roleID変換
-                        permit = 'role'
-                        permitId = self.getKeynameInMethod(permit, 'id')
+                # Media設定のID変換
+                for media in data['medias'].copy():
+                    # ID変換
+                    idName = self.getKeynameInMethod('mediatype', 'id')
+                    id = self.replaceIdName('mediatype', media[idName])
+                    if id:
+                        media.update({idName: id})
                     else:
-                        permit = permitId = 'type'
-
-                    # 権限がtypeではない場合
-                    if permit != 'type':
-                        data[permitId] = self.replaceIdName(permit, data[permitId])
-                    # 不要項目削除
-                    data.pop('users_status', None)
-                    data.pop('gui_access', None)
-                    data.pop('debug_mode', None)
+                        # ID変換できないメディアは削除
+                        data['medias'].remove(media)
+                # 5.2 対応
+                # ユーザー権限がtype -> roleになるのでID変換が必要になる
+                if self.VERSION['major'] >= 5.2:
+                    permitMethod = 'role'
+                    permit = self.getKeynameInMethod(permitMethod, 'id')
+                    if self.checkMasterNode():
+                        data[permit] = self.replaceIdName(permitMethod, data[permit])
+                    elif self.getLatestVersion('MASTER_VERSION') < 5.2:
+                        # 5.2以前は変換の必要がなかったので変換しないで代入
+                        data[permit] = data.pop('type')
+                else:
+                    permit = 'type'
+                usrgrps = 'usrgrps'
+                if self.checkMasterNode():
+                    # 所属Usergroup処理
+                    # usrgrps:[]の中を{'name': 'xxxx'}のバリューだけにする
+                    data[usrgrps] = [param['name'] for param in data.get(usrgrps, []) if param.get('name')]
+                else:
+                    # 認証サービスからの登録ユーザーは除外
+                    if int(data.get('userdirectoryid', 0)):
+                        continue
                     # 特権管理者の複製許可確認
                     if not self.CONFIG.cloningSuperAdmin:
-                        if data[permitId] == ZABBIX_SUPER_ROLE:
+                        if data[permit] == ZABBIX_SUPER_ROLE:
                             continue
                     # 複製許可ユーザーの確認
                     if self.getLatestVersion('MASTER_VERSION') >= 5.4:
@@ -3641,31 +3653,34 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         data['passwd'] = password
                     # usrgrps:[]の中を{'usrgrpid': id}に変換する
                     idName = self.getKeynameInMethod('usergroup', 'id')
-                    usrgrps = data.pop('usrgrps')
-                    data['usrgrps'] = [
+                    data[usrgrps] = [
                         {
-                            idName: self.replaceIdName('usergroup', grp)
-                        } for grp in usrgrps
+                            idName: self.replaceIdName('usergroup', param)
+                        } for param in data.get(usrgrps, [])
                     ]
-                # Media設定処理
-                for media in data['medias'].copy():
                     # 不要項目削除
-                    media.pop('mediaid', None)
-                    media.pop('userid', None)
-                    # 7.0対応
-                    media.pop('userdirectory_mediaid', None)
-                    # ID変換
-                    idName = self.getKeynameInMethod('mediatype', 'id')
-                    id = self.replaceIdName('mediatype', media[idName])
-                    if id:
-                        media.update({idName: id})
-                    else:
-                        # ID変換できないメディアは削除
-                        data['medias'].remove(media)
-                    if not data['medias']:
-                        # 空の場合は項目を消す
-                        data.pop('medias', None)
-
+                    data.pop('userdirectoryid', None)
+                    data.pop('users_status', None)
+                    data.pop('gui_access', None)
+                    data.pop('debug_mode', None)
+                    medias = data.pop('medias', [])
+                    addMedias = []
+                    for media in medias.copy():
+                        # 不要項目削除
+                        media.pop('mediaid', None)
+                        media.pop('userid', None)
+                        # 7.0対応
+                        if int(media.get('userdirectory_mediaid', 0)):
+                            # 認証システムからの指定登録メディアは除外
+                            medias.pop(media)
+                            continue
+                        media.pop('userdirectory_mediaid', None)
+                        addMedias.append(media)
+                    if addMedias:
+                        if self.VERSION['major'] >= 5.2:
+                            data['medias'] = addMedias
+                        else:
+                            data['user_medias'] = addMedias
                 items.append(item)
         except Exception as e:
             return (False, 'processingUser: %s' % e)
@@ -3716,16 +3731,18 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     targets = ['']
                 for target in targets:
                     rKey = '_'.join([target, 'rights']).lstrip('_')
-                    if self.getLatestVersion('MASTER_VERSION') < 6.2 and not self.checkMasterNode():
-                        # マスターノードが6.0以前のデータはrightsが分離されていないので
-                        # ワーカー側処理の場合、*group_rightsはどちらでもrightsを使う
-                        rights = data.pop('rights', None)
+                    if self.checkMasterNode:
+                        pass
                     else:
-                        rights = data.pop(rKey, None)
+                        if self.getLatestVersion('MASTER_VERSION') < 6.2:
+                            # ワーカーノード処理
+                            # マスターノードが6.2以前はrightsが分離されていないので*group_rightsにはrightsの内容を設定する
+                            rKey = 'rights'
+                    rights = data.get(rKey)
+                    # 空ならスキップ
                     if not rights:
-                        # 空なら除外
                         continue
-                    # popしたので初期化
+                    # 初期化
                     data[rKey] = []
                     # 6.0以前の場合はNoneなのでhostgroupにする
                     if target is None:
@@ -3740,33 +3757,6 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                                     'permission': val['permission']
                                 }
                             )
-                # useridsの変換
-                # 6.0対応 userids:[id,...] -> users:[{'userid': id},...]
-                if self.VERSION['major'] >= 6.0:
-                    uKey = 'users'
-                    idName = self.getKeynameInMethod('user', 'id')
-                    if self.checkMasterNode():
-                        pass
-                    else:
-                        # ワーカーノード処理
-                        # 6.0対応
-                        if self.getLatestVersion('MASTER_VERSION') >= 6.0:
-                            users = data.pop(uKey, [])
-                            # IDのみリストに変換
-                            users = [user['userid'] for user in users]
-                        else:
-                            users = data.pop('userids', [])
-                else:
-                    uKey = 'userids'
-                    idName = None
-                    users = data.pop(uKey, [])
-                data[uKey] = []
-                for user in users:
-                    user = self.replaceIdName('user', user)
-                    if user:
-                        data[uKey].append(
-                            {idName: user} if self.VERSION['major'] >= 6.0 else user
-                        )
                 if self.checkMasterNode():
                     # マスターノード処理
                     pass
@@ -3786,9 +3776,9 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         if not data.get('mfa_status'):
                             data.pop('mfa_status', None)
                             data.pop('mfaid', None)
-                    if not data[uKey]:
-                        # 空の場合は項目を消す
-                        data.pop(uKey)
+                    # 所属するユーザーのリストはusergroupには要らない（userの方で処理される）
+                    data.pop('users', None)
+                    data.pop('userids', None)
                     if not data.get('tag_filters'):
                         # 空の場合は項目を消す
                         data.pop('tag_filters', None)
@@ -4276,7 +4266,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
 
         # マスターではこのファンクションは実行不要
         if self.checkMasterNode():
-            return result
+            return (False, 'Not Execute with master-node.')
  
         if self.VERSION['major'] >= 6.0:
             # 6.0以降はAPIで設定
@@ -4430,22 +4420,19 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     if template.get('items'):
                         # 通常アイテム
                         for item in template['items']:
-                            if self.VERSION['major'] >= 6.4:
-                                if item.get('type') != 'HTTP_AGENT':
-                                    item.pop('request_method', None)
+                            if item.get('type') != 'HTTP_AGENT':
+                                item.pop('request_method', None)
                     if template.get('discovery_rules'):
                         # LLD
                         for rule in template.get('discovery_rules', []):
                             # LLDのアイテム
-                            if self.VERSION['major'] >= 6.4:
-                                if rule.get('type') != 'HTTP_AGENT':
-                                    rule.pop('request_method', None)
+                            if rule.get('type') != 'HTTP_AGENT':
+                                rule.pop('request_method', None)
                             if rule.get('item_prototypes'):
                                 # アイテムのプロトタイプ
                                 for item in rule['item_prototypes']:
-                                    if self.VERSION['major'] >= 6.4:
-                                        if item.get('type') != 'HTTP_AGENT':
-                                            item.pop('request_method', None)
+                                    if item.get('type') != 'HTTP_AGENT':
+                                        item.pop('request_method', None)
                     templates.append(template)
                 templates = sorted(templates, key=lambda x:x['name'])
             elif method == 'mediatype':
@@ -4526,12 +4513,14 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 if self.VERSION['major'] in [6.0, 7.0]:
                     # 6.0/7.0だとこっちで依存関係のは問題なく全部入る
                     # なんで？？？？
-                    importData.append(
-                        {
-                            'templates': [items[count]],
-                            'triggers': triggers
-                        }
-                    )
+                    iData = {
+                        'templates': [items[count]],
+                        'triggers': triggers
+                    }
+                    # マスターのバージョンが6.0未満だとvalue_mapsがtemplatesに入ってないので必要
+                    if self.getLatestVersion('MASTER_VERSION') < 6.0:
+                        iData['value_maps'] = importData[0].get('value_maps')
+                    importData.append(iData)
                 elif self.VERSION['major'] == 5.4:
                     # 5.0はvaluemapが別になっているので5.4はテンプレート側処理時に必要になる
                     self.importRules['triggers']['createMissing'] = False
@@ -5640,9 +5629,6 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             '''
             ファンクション内CheckNow実行ファンクション
             '''
-            # DB上のデータがZabbixサーバーに適用されるのを待つ
-            sleep(self.CONFIG.checknowWait)
-
             # 5.2対応
             if self.VERSION['major'] >= 5.2:
                 option = []
@@ -5659,6 +5645,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     'itemids': targets
                 }
             try:
+                # DB上のデータがZabbixサーバーに適用されるのを待つ
+                sleep(self.CONFIG.checknowWait)
                 self.ZAPI.task.create(*option)
                 return 'OK'
             except Exception as e:
@@ -5682,7 +5670,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         time = int(item)
                     except:
                         continue
-            interval.append(time)
+            interval.append(str(time))
+        interval = set(sorted(interval))
 
         # Zabbixに適用されているホスト
         hosts = [item['ZABBIX_ID'] for item in self.LOCAL['host'].values()]
@@ -5692,39 +5681,46 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         # 4.2対応
         if self.VERSION['major'] >= 4.2:
             output.append('master_itemid')
-        targets = self.ZAPI.discoveryrule.get(
-            output=output,
-            hostids=hosts
-        )
-        # 依存元アイテムのはmaster_itemidを、それ以外はitemidを使う
-        targets = [
-            item['master_itemid'] if int(item['master_itemid']) else item['itemid'] for item in targets
-        ]
+        try:
+            targets = self.ZAPI.discoveryrule.get(
+                output=output,
+                hostids=hosts
+            )
+            # 依存元アイテムのはmaster_itemidを、それ以外はitemidを使う
+            targets = [
+                item['master_itemid'] if int(item['master_itemid']) else item['itemid'] for item in targets
+            ]
+        except:
+            targets = []
 
         # 表示（仮）
-        print(f'\n{TAB*2}LLDs: ', end='', flush=True)
-
-        # LLDへのCheckNow実行
-        res = checknow(targets)
+        print(f'\n{TAB*2}LLDs {len(targets)} items (wait {self.CONFIG.checknowWait}s): ', end='', flush=True)
+        if not targets:
+            print('No Exist LLDs items.')
+        else:
+            # LLDへのCheckNow実行
+            res = checknow(targets)
 
         # 表示（仮）
         print(f'{res}', end='', flush=True)
 
         # 更新間隔にユーザーマクロで部分一致文字列を適用しているものを抽出
-        targets = [
-            item['itemid', 'master_itemid'] for item in self.ZAPI.item.get(
-                output='itemid',
+        try:
+            targets = self.ZAPI.item.get(
+                output=output,
                 hostids=hosts,
                 filter={'delay': interval}
             )
-        ]
-        # 依存元アイテムのはmaster_itemidを、それ以外はitemidを使う
-        targets = [
-            item['master_itemid'] if int(item['master_itemid']) else item['itemid'] for item in targets
-        ]
+            # 依存元アイテムのはmaster_itemidを、それ以外はitemidを使う
+            targets = [
+                item['master_itemid'] if int(item['master_itemid']) else item['itemid'] for item in targets
+            ]
+        except:
+            targets = []
         if targets:
             # 表示（仮）
-            print(f'\n{TAB*2}TargetInterval Items: ', end='', flush=True)
+            interval = '/'.join(interval)
+            print(f'\n{TAB*2}TargetInterval[{interval}] {len(targets)} items (wait {self.CONFIG.checknowWait}s): ', end='', flush=True)
 
             # 実行
             res = checknow(targets)

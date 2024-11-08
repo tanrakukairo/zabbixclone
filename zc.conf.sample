@@ -3,7 +3,7 @@
     "no_config_files": "YES|NO default:NO, Ignore in files.",
     "node": "zabbix server name",
     "role": "master|woker|replica",
-    "template_export_count": 50,
+    "template_separate": 50,
     "template_skip": "YES|NO, default:NO",
     "endpoint": "http://localhost:8080/",
     "description": "only master node, add information.",
