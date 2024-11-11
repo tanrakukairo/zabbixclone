@@ -2615,27 +2615,9 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         latest = self.VERSIONS[0] if len(self.VERSIONS) > 0 else {}
         return latest if not target else latest.get(target, latest)
 
-    def updateDbData(self, table=None, data=None):
-        '''
-        DB操作: テーブル内の対象を更新
-        '''
-        return self.operateDbDirect('update', table, data)
-
-    def replaceDbData(self, table=None, data=None):
-        '''
-        DB操作: テーブルの全データ入れ替え
-        '''
-        return self.operateDbDirect('replace', table, data)
-
-    def getDbData(self, table=None):
-        '''
-        DB操作: テーブルの全データ取得
-        '''
-        return self.operateDbDirect('get', table)
-
     def operateDbDirect(self, operate=None, table=None, tableData=None):
         '''
-        DB操作ファンクション実体
+        DB操作ファンクション
         '''
 
         # パラメータ確認
@@ -2816,10 +2798,13 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         
         for item in self.STORE['regexp']:
             data = item['DATA']
-            for expression in data['expressions']:
-                if int(expression['expression_type']) != 1:
-                    # これを使用する１以外ではエラーになるので削除
-                    expression.pop('exp_delimiter', None)
+            if self.checkMasterNode():
+                pass
+            else:
+                for expression in data['expressions']:
+                    if int(expression['expression_type']) != 1:
+                        # これを使用する１以外ではエラーになるので削除
+                        expression.pop('exp_delimiter', None)
         
         return result
 
@@ -4025,7 +4010,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             try:
                 self.LOCAL['database'] = {}
                 for table in self.sections['DB_DIRECT']:
-                    res = self.getDbData(table)
+                    res = self.operateDbDirect('get', table)
                     if res[0]:
                         self.LOCAL['database'][table] = {
                             'ZABBIX_ID': None,
@@ -4277,11 +4262,112 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         if self.checkMasterNode():
             return (False, 'Not Execute with master-node.')
  
-        if self.VERSION['major'] >= 6.0:
-            # 6.0以降はAPIで設定
+        if self.getLatestVersion('MASTER_VERSION') < 6.0:
+
+            if not self.STORE.get('database'):
+                # 入れ替えるデータがない
+                return (True, 'No Exist DB_DIRECT data.')
+
+            # マスターノード6.0以前のDatabaseデータバージョン間変化の操作
+            # ワーカーノード6.0以降用の処理
+            settings = self.LOCAL.get('settings')
+            authentication = self.LOCAL.get('authentication')
+            self.STORE['settings'] = []
+            self.STORE['regexp'] = []
+            self.STORE['authentication'] = []
+
+            dbDirect = {}
+            expressions = []
+
+            names = [item['NAME'] for item in self.STORE['database']]
+            # 処理順を固定
+            for table in ['config', 'expressions', 'regexps']:
+                data = self.STORE['database'][names.index(table)]
+                if not data:
+                    continue
+                data = data['DATA']
+                if table == 'config':
+                    # col名変更対応
+                    for ver, renames in self.dbConfigRenameCols.items():
+                        # 自身のバージョンが適用されたバージョンより新しければカラムの名前を変える
+                        if self.VERSION['major'] >= float(ver):
+                            for rename in renames:
+                                if rename[0] in data[0]:
+                                    # rename対象のインデックス取得と対象の内容を取得
+                                    idx = data[0].index(rename[0])
+                                    value = data[1][idx]
+                                    # 変更前のものを削除
+                                    del data[0][idx]
+                                    del data[1][idx]
+                                    # 末尾に変更するものを追加
+                                    data[0].append(rename[1])
+                                    data[1].append(value)
+                    # ワーカーノードが6.0以上ならばsettingsが存在するので、STOREにconfigの内容を追加
+                    if settings and authentication:
+                        for param in data[0]:
+                            # データの成型
+                            item = {
+                                'NAME': param,
+                                'DATA': {
+                                    param: data[1][data[0].index(param)]
+                                }
+                            }
+                            # ローカルにあるものだけSTOREにいれる
+                            if param in settings.keys():
+                                # settingsにある
+                                method = 'settings'
+                            elif param in authentication.keys():
+                                # authenticationにある
+                                method = 'authentication'
+                            else:
+                                # 除去
+                                continue
+                            self.STORE[method].append(item)
+                        # colの廃止処理は不要
+                        continue
+                    # 廃止されたColのデータ削除
+                    for version, drops in self.dbConfigDropCols.items():
+                        # 自身のバージョンが適用されたバージョンより新しければカラムを削除する
+                        if self.VERSION['major'] >= version:
+                            for drop in drops:
+                                if drop in data[0]:
+                                    idx = data[0].index(drop)
+                                    del data[0][idx]
+                                    del data[1][idx]
+                elif table == 'expressions':
+                    # expressionデータの変換
+                    for row in data[1:]:
+                        exp = {}
+                        for header in data[0][1:]:
+                            exp[header] = row[data[0].index(header)]
+                        expressions.append(exp)
+                else:
+                    # regexpのデータ作成
+                    self.STORE['regexp'] = []
+                    for row in data[1:]:
+                        # expressionsから自分のregexpidのものを取得
+                        exps = [item for item in expressions if item.get('regexpid') == row[0]]
+                        if not exps:
+                            continue
+                        # regexpidを除去
+                        [item.pop('regexpid', None) for item in exps]
+                        self.STORE['regexp'].append(
+                            {
+                                'NAME': row[1],
+                                'DATA': {
+                                    'name': row[1],
+                                    'expressions': exps
+                                }
+                            }
+                        )
+                # DB直用データに追加
+                dbDirect[table] = data
+
+        if self.STORE.get('settings'):
+            # マスターノードのデータが6.0以降はAPIで設定
             # グローバル設定
             globalSettings = {}
-            for item in self.STORE.get('settings', []):
+            for item in self.STORE['settings']:
                 if item['NAME'] in self.discardParameter['settings']:
                     continue
                 globalSettings.update(item['DATA'])
@@ -4350,48 +4436,16 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         self.ZAPI.usermacro.createglobal(**macro)
                     except Exception as e:
                         result = (False, 'Failed, Secret Globalmacro/create %s. %s' % (item, e))
-
         else:
-            # 6.0以前のDB Direct操作
-            for tableData in self.STORE.get('database', []):
-                if not tableData:
-                    # 入れ替えるデータがない
-                    result = (True, 'No Exist DB_DIRECT data.')
-                table = tableData['NAME']
-                data = tableData['DATA']
+            # データベース直の適用実行
+            for table, data in dbDirect.items():
                 if table == 'config':
-                    # col名変更対応
-                    for ver, renames in self.dbConfigRenameCols.items():
-                        # 自身のバージョンが適用されたバージョンより新しければカラムの名前を変える
-                        if self.VERSION['major'] >= float(ver):
-                            for rename in renames:
-                                try:
-                                    idx = data[0].index(rename[0])
-                                    value = data[1][idx]
-                                    del data[0][idx]
-                                    del data[1][idx]
-                                    data[0].append(rename[1])
-                                    data[1].append(value)
-                                except:
-                                    pass
-                    # 廃止されたColのデータ削除
-                    for version, drops in self.dbConfigDropCols.items():
-                        # 自身のバージョンが適用されたバージョンより新しければカラムを削除する
-                        if self.VERSION['major'] >= version:
-                            for drop in drops:
-                                try:
-                                    idx = data[0].index(drop)
-                                    del data[0][idx]
-                                    del data[1][idx]
-                                except:
-                                    pass
-                    result = self.updateDbData(table, data)
-                    if not result[0]:
-                        break
+                    result = self.operateDbDirect('update', table, data)
                 else:
-                    result = self.replaceDbData(table, data)
-                    if not result[0]:
-                        break
+                    result = self.operateDbDirect('replace', table, data)
+                if not result[0]:
+                    break
+
         return result
 
     def setConfigurationToZabbix(self):
@@ -4526,9 +4580,11 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         'templates': [items[count]],
                         'triggers': triggers
                     }
-                    # マスターのバージョンが6.0未満だとvalue_mapsがtemplatesに入ってないので必要
+                    # マスターのバージョンが6.0未満だとvalue_mapsがtemplatesに必要
                     if self.getLatestVersion('MASTER_VERSION') < 6.0:
                         iData['value_maps'] = importData[0].get('value_maps')
+                    else:
+                        importData[0].pop('value_maps', None)
                     importData.append(iData)
                 elif self.VERSION['major'] == 5.4:
                     # 5.0はvaluemapが別になっているので5.4はテンプレート側処理時に必要になる
