@@ -4483,19 +4483,22 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     if template.get('items'):
                         # 通常アイテム
                         for item in template['items']:
-                            if item.get('type') != 'HTTP_AGENT':
-                                item.pop('request_method', None)
+                            if self.VERSION['major'] >= 6.4:
+                                if item.get('type') != 'HTTP_AGENT':
+                                    item.pop('request_method', None)
                     if template.get('discovery_rules'):
                         # LLD
                         for rule in template.get('discovery_rules', []):
                             # LLDのアイテム
-                            if rule.get('type') != 'HTTP_AGENT':
-                                rule.pop('request_method', None)
+                            if self.VERSION['major'] >= 6.4:
+                                if rule.get('type') != 'HTTP_AGENT':
+                                    rule.pop('request_method', None)
                             if rule.get('item_prototypes'):
                                 # アイテムのプロトタイプ
                                 for item in rule['item_prototypes']:
-                                    if item.get('type') != 'HTTP_AGENT':
-                                        item.pop('request_method', None)
+                                    if self.VERSION['major'] >= 6.4:
+                                        if item.get('type') != 'HTTP_AGENT':
+                                            item.pop('request_method', None)
                     templates.append(template)
                 templates = sorted(templates, key=lambda x:x['name'])
             elif method == 'mediatype':
@@ -4598,6 +4601,9 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 else:
                     # trigger prototype内の依存関係以外はこれで入る
                     self.importRules['triggers']['createMissing'] = False
+                    if self.VERSION['major'] == 4.2:
+                        # 4.2だけこれが消えてる
+                        self.importRules['templateLinkage'].pop('deleteMissing', None)
                     importData.append({'templates': [items[count]]})
                 count += 1
 
@@ -4859,7 +4865,10 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             # バリューなしのキーを削除:5.x系であったcreateの空データ無視がなくなった時の対応（だったかな）
             [data.pop(key, None) for key, value in data.copy().items() if not value]
             # インベントリモードの変換:MANUALの場合キーが存在しない
-            data['inventory_mode'] = ZABBIX_INVENTORY_MODE.get(data['inventory_mode'], ZABBIX_INVENTORY_MODE['MANUAL'])
+            data['inventory_mode'] = ZABBIX_INVENTORY_MODE.get(data.get('inventory_mode'), ZABBIX_INVENTORY_MODE['MANUAL'])
+            # 4.2対応
+            if data.get('inventory'):
+                data['inventory'].pop('inventory_mode', None)
             # インターフェイスの処理
             if len(data['interfaces']) == 1:
                 # インターフェイスが一つしかない場合はそれがメインインターフェイス
@@ -4873,13 +4882,13 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         'ip': hostIf.get('ip', '127.0.0.1'),
                         'main': Y_N[hostIf.pop('default', 'NO')],
                         'port': hostIf.get('port', '10050'),
-                        'type': ZABBIX_IFTYPE[ifType],
+                        'type': ZABBIX_IFTYPE[ifType] if not ifType.isdigit() else ifType,
                         'useip': 0 if hostIf.get('useip', 'YES') == 'NO' else 1,
                         'dns': hostIf.get('dns', ''),
                     }
                 )
                 # 強制DNS->IP変換処理
-                if hostIf['useip'] == 0 and self.CONFIG.forceUseip:
+                if int(hostIf['useip']) == 0 and self.CONFIG.forceUseip:
                     try:
                         new_ip = socket.gethostbyname(hostIf['dns'])
                     except:
@@ -4905,7 +4914,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             }
                         )
                 else:
-                    hostIf['bulk'] = Y_N[hostIf.get('bulk', 'YES')]
+                    bulk = hostIf.get('bulk', 'YES')
+                    hostIf['bulk'] = Y_N[bulk] if not bulk.isdigit() else bulk
             # Proxy変換
             if self.VERSION['major'] >= 7.0:
                 if self.getLatestVersion('MASTER_VERSION') >= 7.0:
@@ -5228,7 +5238,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     res = f'Failed, {e}'
 
                 # 表示（仮）
-                print(f'{TAB*3}{name}: {res}')
+                print(f'\n{TAB*3}{name}: {res}')
 
         # Zabbixからのデータ再取得
         self.getDataFromZabbix()            
@@ -5694,8 +5704,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             '''
             ファンクション内CheckNow実行ファンクション
             '''
-            # 5.2対応
-            if self.VERSION['major'] >= 5.2:
+            # 5.0.5対応
+            if self.VERSION['major'] >= 5.0 and self.VERSION['minor'] >= 5:
                 option = []
                 for target in targets:
                     option.append(
@@ -5712,7 +5722,10 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             try:
                 # DB上のデータがZabbixサーバーに適用されるのを待つ
                 sleep(self.CONFIG.checknowWait)
-                self.ZAPI.task.create(*option)
+                if isinstance(option, list):
+                    self.ZAPI.task.create(*option)
+                else:
+                    self.ZAPI.task.create(**option)
                 return 'OK'
             except Exception as e:
                 return f'NG, {e}'

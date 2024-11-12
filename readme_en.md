@@ -92,10 +92,10 @@ Checking operation within Windows11pro and alpine:latest container.
 
 ## Requirement
 
-* Zabbix 4.0 Later
+* Zabbix 4.2 Later (host-tag supported)
 * Python 3.9 Later
 
-Zabbix 4.0 or later (excluding development versions) will be supported.
+excluding development versions.
 
 Required Python Library:
 * pyzabbix
@@ -814,6 +814,7 @@ It is currently unknown if changes to trigger expressions (Zabbix5.4 or later) c
 
 * 6.0 -> 6.2/6.4, Trigger prototype's dependencies cannot import.
 * 6.0 -> later, Some 6.0's templates, Template configured hostgroup for hostprototype cannot be registered because that hostgroup is changed templategroup.
+* 4.2 -> later, "Template VM VMware", Template configured hostgroup for hostprototype cannot be registered because it unrecognized target hostgroup. (Target hostgroup "Hypervisors" exists.)
 
 "-" is skiped tests because it's same codes as 7.0 -> 7.0 tests.
 
@@ -828,10 +829,9 @@ It is currently unknown if changes to trigger expressions (Zabbix5.4 or later) c
 |5.0|5.4|N/A|OK|-|-|-|
 |5.0|5.2|N/A|OK|-|-|-|
 |5.0|5.0|N/A|OK|-|-|-|
-|4.0|5.0|N/A|||||
-|4.0|4.4|N/A|||||
-|4.0|4.2|N/A|||||
-|4.0|4.0|N/A|||||
+|4.2|5.0|N/A|OK?|-|-|-|
+|4.2|4.4|N/A|OK?|-|-|-|
+|4.2|4.2|N/A|OK?|-|-|-|
 
 *1: Only while ZabbixCloud is Zabbix7.0
 
