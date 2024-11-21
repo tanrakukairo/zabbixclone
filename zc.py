@@ -16,16 +16,13 @@ import sys
 import json
 import uuid
 import requests
-import boto3
-from boto3.dynamodb.conditions import Key
-from pyzabbix import ZabbixAPI
+from zabbix_utils import ZabbixAPI
 import re
 import bz2
 import socket
 from datetime import datetime, UTC
 from calendar import timegm
 from time import sleep
-import redis
 from concurrent import futures
 import inspect
 import argparse
@@ -33,7 +30,7 @@ import shutil
 import textwrap
 
 # ZABBIX関連の固定値とか
-ZABBIX_DEFAULT_AUTH = ['Admin', 'zabbix']
+ZABBIX_DEFAULT_AUTH = {'user': 'Admin', 'password': 'zabbix'}
 ZABBIX_CONFIG_PATH = '/etc/zabbix'
 ZABBIX_SERVER_CONFIG = 'zabbix_server.conf'
 ZABBIX_USER_CONFIG_PATH = '/var/lib/zabbix/conf.d'
@@ -286,10 +283,10 @@ class ZabbixCloneConfig():
         self.platformPassword = CONFIG.get('platform_password', None)
         # 認証情報
         self.token = CONFIG.get('token', None)
-        self.auth = [
-            CONFIG.get('user', ZABBIX_DEFAULT_AUTH[0]),
-            CONFIG.get('password', None)
-        ]
+        self.auth = {
+            'user': CONFIG.get('user', ZABBIX_DEFAULT_AUTH['user']),
+            'password': CONFIG.get('password', None)
+        }
         if self.role == 'worker':
             # 適用指定バージョン
             self.targetVersion = CONFIG.get('version', None)
@@ -300,16 +297,6 @@ class ZabbixCloneConfig():
             self.targetVersion = None
             # マスターノードのパスワードは操作しない
             self.updatePassword =False
-        # Bacis/Digit認証利用
-        self.httpAuth = True if CONFIG.get('http_auth', 'NO') == 'YES' else False
-        if self.zabbixCloud:
-            # ZabbixCloud対応: HTTP AUTHは無効
-            self.httpAuth = False
-        if self.httpAuth:
-            # Basic/Digit認証利用ではアップデートできない
-            self.updatePassword = False
-            # トークンが使えない
-            self.token = None
         # ワーカーノードの強制初期化
         self.forceInitialize = True if CONFIG.get('force_initialize', 'NO') == 'YES' else False
         if self.role == 'master':
@@ -373,8 +360,7 @@ class ZabbixCloneConfig():
         self.node = self.storeConnect.get('directNode')
         self.endpoint = self.storeConnect.get('directEndpoint')
         self.token = self.storeConnect.get('directToken')
-        self.auth = []
-        self.httpAuth = False
+        self.auth = {}
         self.updatePassword = False
         self.templateSkip = False
         return ZC_COMPLETE
@@ -403,12 +389,11 @@ class ZabbixCloneConfig():
         if self.token:
             print(f'{TAB}Authentication Method: TOKEN')
         else:
+            user = self.auth['user']
             print(f'{TAB}Authentication Method: PASSWORD')
-            print(f'{TAB*2}User: {self.auth[0]}')
+            print(f'{TAB*2}User: {user}')
         if self.updatePassword:
             print(f'{TAB}Update Password: YES')
-        if self.httpAuth:
-            print(f'{TAB}HTTP Basic/Digit Authentication Mode: YES')
         if self.selfCert:
             print(f'{TAB}Self Certification Use: YES')
 
@@ -515,7 +500,16 @@ class ZabbixCloneParameter():
     '''
 
     def __init__(self, version):
-        version = version if version else {'major': ZC_DEFAULT_ZABBIX_VERSION, 'minor': 0}
+        if version:
+            version = {
+                'major': version.major,
+                'minor': version.minor
+            }
+        else:
+            version = {
+                'major': ZC_DEFAULT_ZABBIX_VERSION,
+                'minor': 0
+            }
 
         # ベース:4.0
         methodParameters = {
@@ -1369,6 +1363,8 @@ class ZabbixCloneDatastore():
         '''
         result = (True, self.storeTables)
 
+        import boto3
+
         # 負荷調整パラメーター
         self.dydbLimit = storeConnect.get('dydbLimit', self.dydbLimit)
         self.dydbWait = storeConnect.get('dydbWait', self.dydbWait)
@@ -1412,6 +1408,8 @@ class ZabbixCloneDatastore():
         Redis設定初期化
         '''
         result = (True, self.storeTables)
+
+        import redis
 
         # 接続情報の確認
         if storeConnect.get('redisHost') and storeConnect.get('redisPort'):
@@ -1491,6 +1489,8 @@ class ZabbixCloneDatastore():
         DynamoDB Queryラッパー
         フィルターは１つだけ
         '''
+        from boto3.dynamodb.conditions import Key
+
         if table not in self.storeTables.keys() or not version:
             return {'Items':[], 'Count': 0}
         client = self.storeTables[table]['client']
@@ -2100,13 +2100,9 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         self.ZAPI = result[1]
         # 実行対象のZabbix Version取得
         try:
-            self.VERSION = self.ZAPI.api_version().split('.')
-            self.VERSION = {
-                'major': float('.'.join(self.VERSION[:2])),
-                'minor': int(self.VERSION[-1])
-            }
-        except:
-            print('Failed Get zabbix version info.')
+            self.VERSION = self.ZAPI.api_version()
+        except Exception as e:
+            print('Failed Get zabbix version info. %s' % e)
             sys.exit(2)
 
         # 権限確認
@@ -2114,16 +2110,16 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             data = {}
             try:
                 # 5.4対応 キー名の変更
-                if self.VERSION['major'] >= 5.4:
+                if self.VERSION.major >= 5.4:
                     name = 'username'
                 else:
                     name = 'alias'
-                data = self.ZAPI.user.get(output='extend', filter={name: self.CONFIG.auth[0]})
+                data = self.ZAPI.user.get(output='extend', filter={name: self.CONFIG.auth['user']})
                 data = data[0]
             except:
-                print('Failed, get %s Information.' % self.CONFIG.auth[0])
+                print('Failed, get %s Information.' % self.CONFIG.auth['user'])
                 sys.exit(2)
-            if self.VERSION['major'] >= 5.2:
+            if self.VERSION.major >= 5.2:
                 permit = 'roleid'
             else:
                 permit = 'type'
@@ -2132,7 +2128,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 sys.exit(2)
 
         # Zabbix DB接続設定、6.0以降はDB直接接続は使用しない
-        if self.VERSION['major'] < 6.0:
+        if self.VERSION.major < 6.0:
             result = self.initDbConnect()
             if not result[0]:
                 print(result[1])
@@ -2172,17 +2168,12 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         auth = self.CONFIG.auth
 
         # 認証情報がない
-        if not token and not auth[1]:
+        if not token and not auth.get('password'):
             return (False, 'No Exist Credentials.')
 
         # 自己証明書を使う
         if self.CONFIG.selfCert:
             API.session.verify = False
-
-        # HTTP認証対応、コンフィグ生成時にパスワード変更とトークンは無効にされている
-        if self.CONFIG.httpAuth:
-            API.session.auth = auth
-            auth = auth[:1]
 
         # トークンで認証確認
         if token:
@@ -2201,7 +2192,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         # パスワードで認証確認
         if not token and auth:
             try:
-                API.login(*auth)
+                API.login(**auth)
                 # 変更後のパスワードで認証できたので更新しない
                 self.CONFIG.updatePassword = False
                 if token == '':
@@ -2219,11 +2210,11 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         if self.CONFIG.updatePassword and not token:
             if self.CONFIG.platformPassword:
                 # ZabbixCloud対応: プラットフォームがAdminのデフォルトパスワード生成
-                auth = [ZABBIX_DEFAULT_AUTH[0], self.CONFIG.platformPassword]
+                auth = {'user':ZABBIX_DEFAULT_AUTH['user'], 'password': self.CONFIG.platformPassword}
             else:
                 auth = ZABBIX_DEFAULT_AUTH
             try:
-                API.login(*auth)
+                API.login(**auth)
             except:
                 return (False, 'Cannot Autneticate for ChangePassword.')
 
@@ -2293,7 +2284,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
 
         return ZC_COMPLETE
 
-    def changePassword(self, *auth):
+    def changePassword(self, **auth):
         '''
         パスワード変更
         auth: [user, changePasswd, currentPasswd]
@@ -2305,30 +2296,30 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         idName = self.getKeynameInMethod('user', 'id')
         name = self.getKeynameInMethod('user', 'name')
         auth = auth if len(auth) > 2 else self.CONFIG.auth
-        currentPasswd = auth[2] if len(auth) == 3 else ZABBIX_DEFAULT_AUTH[1]
+        currentPasswd = auth['current'] if len(auth) == 3 else ZABBIX_DEFAULT_AUTH['password']
         # ZabbixCloud対応: プラットフォーム生成のデフォルトパスワードを指定する
         if self.CONFIG.platformPassword:
             currentPasswd = self.CONFIG.platformPassword
 
         try:
             # 対象管理者の確認
-            admin = self.ZAPI.user.get(output=[idName, name], filter={name: auth[0]})
+            admin = self.ZAPI.user.get(output=[idName, name], filter={name: auth['user']})
             if not admin:
-                result = (True, 'No Exist User, %s.' % auth[0])
+                result = (True, 'No Exist User, %s.' % auth['user'])
             else:
                 # パスワード変更
                 change = {
                     idName: admin[0][idName],
-                    'passwd': auth[1]
+                    'passwd': auth['password']
                 }
                 # 6.4対応 現在のパスワードが必要
-                if self.VERSION['major'] >= 6.4:
+                if self.VERSION.major >= 6.4:
                     change.update({'current_passwd': currentPasswd})
                 self.ZAPI.user.update(**change)
                 # 変更したパスワードで再認証
                 self.ZAPI.login(*auth)
         except Exception as e:
-            result = (False, 'Failed Update Password for %s. %s' % (auth[0], e))
+            result = (False, 'Failed Update Password for %s. %s' % (auth['user'], e))
 
         return result
 
@@ -2363,7 +2354,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             {
                                 'VERSION_ID': '__FIRST_CREATE__',
                                 'TIMESTAMP': -1,
-                                'MASTER_VERSION': self.VERSION['major'],
+                                'MASTER_VERSION': self.VERSION.major,
                                 'DESCRIPTION': ''
                             }
                         ]
@@ -2380,7 +2371,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             return result
 
         # ワーカーのZabbixバージョンがマスターのZabbixバージョンより古い場合は終了
-        if not self.checkMasterNode and self.VERSION['major'] < self.getLatestVersion('MASTER_VERSION'):
+        if not self.checkMasterNode and self.VERSION.major < self.getLatestVersion('MASTER_VERSION'):
             return (False, '%s zabbix version > Onstore Data zabbix version.' % self.CONFIG.node)
 
         # データの初回取得
@@ -2401,7 +2392,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             else:
                 # デフォルト通知ユーザーが特権管理者か確認
                 # 5.2対応 権限管理変更 type -> role
-                if self.VERSION['major'] >= 5.2:
+                if self.VERSION.major >= 5.2:
                     permit = 'roleid'
                 else:
                     permit = 'type'
@@ -2532,10 +2523,10 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 # イニシャライズ対象のメソッド、グループは要素があると消せないので最後に消す
                 methods = ['usermacro', 'correlation', 'drule', 'mediatype', 'action', 'script', 'maintenance', 'host', 'proxy', 'template', 'hostgroup']
                 # 6.0対応
-                if self.VERSION['major'] >= 6.0:
+                if self.VERSION.major >= 6.0:
                     methods = ['service', 'sla', 'regexp'] + methods
                 # 6.2対応
-                if self.VERSION['major'] >= 6.2:
+                if self.VERSION.major >= 6.2:
                     # hostgroupからtemplategroupに分離されたので追加
                     methods.append('templategroup')
                     # settingsのdiscovery_groupidが削除不能のデフォルトHG
@@ -2545,7 +2536,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     systemGroup = [item['ZABBIX_ID'] for item in self.LOCAL['hostgroup'].values() if int(item['DATA'].get('internal', 0))]
                     systemGroup = systemGroup[0]
                 # 7.0対応
-                if self.VERSION['major'] >= 7.0:
+                if self.VERSION.major >= 7.0:
                     methods.append('proxygroup')
                 # ZABBIXデフォルト設定の削除
                 for method in methods:
@@ -2602,7 +2593,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             self.NEW = {
                 'VERSION_ID': str(uuid.uuid4()),
                 'UNIXTIME': UNIXTIME(),
-                'MASTER_VERSION': self.VERSION['major'],
+                'MASTER_VERSION': self.VERSION.major,
                 'DESCRIPTION': description
             }
         return self.NEW
@@ -2843,7 +2834,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         if not targetData:
                             targetData = data.pop(rename, None)
                         # 6.0対応
-                        if self.VERSION['major'] >= 6.0:
+                        if self.VERSION.major >= 6.0:
                             rename = rename.replace('acknowledge', 'update')
                         if not targetData:
                             targetData = data.pop(target, None)
@@ -2881,7 +2872,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 # アクション条件のID変換処理
                 for filter_item in data['filter']['conditions']:
                     # 6.0以降で入っているとエラーになる項目を削除
-                    if self.VERSION['major'] >= 6.0:
+                    if self.VERSION.major >= 6.0:
                         if not custom_formula:
                             filter_item.pop('formulaid', None)
                         if not filter_item.get('value'):
@@ -3030,7 +3021,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     scriptType = int(data['type'])
                     scope = int(data.get('scope', 0))
                     # 5.4対応
-                    if self.VERSION['major'] >= 5.4:
+                    if self.VERSION.major >= 5.4:
                         # Webhook script用パラメーターの削除
                         if scriptType != 0:
                             # Scriptではない
@@ -3065,13 +3056,13 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             data.pop('host_access', None)
                             data.pop('confirmation', None)
                     # 6.4対応
-                    if self.VERSION['major'] >= 6.4:
+                    if self.VERSION.major >= 6.4:
                         # URL用パラメーターの削除
                         if scriptType != 6:
                             data.pop('url', None)
                             data.pop('new_window', None)
                     # 7.0 対応
-                    if self.VERSION['major'] >= 7.0:
+                    if self.VERSION.major >= 7.0:
                         # スコープがmanual host action/manual event actionではない
                         # またはmanualinputが0である
                         if scope not in [2, 4] or int(data.get('manualinput', 0)) == 0:
@@ -3134,7 +3125,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     continue
                 if self.checkMasterNode():
                     # 6.2対応
-                    if self.VERSION['major'] >= 6.2:
+                    if self.VERSION.major >= 6.2:
                         hosts = 'hosts'
                         groups = 'hostgroups'
                     else:
@@ -3154,7 +3145,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     if not data['tags']:
                         data.pop('tags')
                 else:
-                    if self.VERSION['major'] >= 6.2:
+                    if self.VERSION.major >= 6.2:
                         hosts = 'hosts'
                         groups = 'groups'
                     else:
@@ -3208,7 +3199,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 data = item['DATA']
                 if self.checkMasterNode():
                     # 7.0対応
-                    if self.VERSION['major'] >= 7.0:
+                    if self.VERSION.major >= 7.0:
                         # プロキシグループのID変換
                         id = self.getKeynameInMethod('proxygroup', 'id')
                         data[id] = self.replaceIdName('proxygroup', data[id])
@@ -3223,7 +3214,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             data.pop(timeout, None)
                     mode = int(data.get('status', 5)) - 5
                     # 7.0対応
-                    if self.VERSION['major'] >= 7.0:
+                    if self.VERSION.major >= 7.0:
                         # active/passiveのモード判定、7.0に合わせて0:active/1:passive
                         id = self.getKeynameInMethod('proxygroup', 'id')
                         if self.getLatestVersion('MASTER_VERSION') >= 7.0:
@@ -3344,7 +3335,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 # プロキシの変換
                 # 7.0でプロキシグループに対応していないので、7.2以降変更の可能性あり
                 idRename = None
-                if self.VERSION['major'] >= 7.0:
+                if self.VERSION.major >= 7.0:
                     # ワーカーノードで7.0未満のマスターノードのデータ
                     if self.getLatestVersion('MASTER_VERSION') < 7.0 and not self.checkMasterNode():
                         idName = 'proxy_hostid'
@@ -3612,7 +3603,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         data['medias'].remove(media)
                 # 5.2 対応
                 # ユーザー権限がtype -> roleになるのでID変換が必要になる
-                if self.VERSION['major'] >= 5.2:
+                if self.VERSION.major >= 5.2:
                     permitMethod = 'role'
                     permit = self.getKeynameInMethod(permitMethod, 'id')
                     data[permit] = self.replaceIdName(permitMethod, data.get(permit))
@@ -3671,7 +3662,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         media.pop('userdirectory_mediaid', None)
                         addMedias.append(media)
                     if addMedias:
-                        if self.VERSION['major'] >= 5.2:
+                        if self.VERSION.major >= 5.2:
                             data['medias'] = addMedias
                         else:
                             data['user_medias'] = addMedias
@@ -3719,7 +3710,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     ]
                 # rightsのidを変換
                 # 6.2対応
-                if self.VERSION['major'] >= 6.2:
+                if self.VERSION.major >= 6.2:
                     targets = ['hostgroup', 'templategroup']
                 else:
                     targets = ['']
@@ -3757,7 +3748,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 else:
                     # ワーカーノード処理
                     # 6.2対応
-                    if self.VERSION['major'] >= 6.2:
+                    if self.VERSION.major >= 6.2:
                         # 0の場合不要
                         if not int(data.get('userdirectoryid', 0)):
                             data.pop('userdirectoryid', None)
@@ -3765,7 +3756,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         if int(data.get('gui_access')) in [1, 3]:
                             data.pop('userdirectoryid', None)
                     # 7.0対応
-                    if self.VERSION['major'] >= 7.0:
+                    if self.VERSION.major >= 7.0:
                         # MFAを使わないのであれば不要
                         if not data.get('mfa_status'):
                             data.pop('mfa_status', None)
@@ -3812,7 +3803,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             for param in params:
                                 if param.get('name') in self.discardParameter['role']:
                                     rules[rule].remove(param)
-                    if self.VERSION['major'] >= 6.4:
+                    if self.VERSION.major >= 6.4:
                         # configuration.actionsの分割
                         value = 0
                         for param in data['rules']['ui'].copy():
@@ -3977,7 +3968,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             for method, options in self.methodParameters.items():
                 # メソッドが追加されたバージョン未満ならスキップ
                 for version, addMethods in self.addMethods.items():
-                    if self.VERSION['major'] < version and method in addMethods:
+                    if self.VERSION.major < version and method in addMethods:
                         continue
                 # 消えたメソッドはsuper().__init__でmethodParametersから削除されるので処理はない
                 # methodParamterに登録されているメソッドのデータをget
@@ -4006,7 +3997,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             result = (False, 'Failed, getDataFromZabbix/API %s. %s' % (method, e))
 
         # 6.0以前のマスターノードならばデータベース操作でデータ取得
-        if self.checkMasterNode and self.VERSION['major'] < 6.0:
+        if self.checkMasterNode and self.VERSION.major < 6.0:
             try:
                 self.LOCAL['database'] = {}
                 for table in self.sections['DB_DIRECT']:
@@ -4290,7 +4281,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     # col名変更対応
                     for ver, renames in self.dbConfigRenameCols.items():
                         # 自身のバージョンが適用されたバージョンより新しければカラムの名前を変える
-                        if self.VERSION['major'] >= float(ver):
+                        if self.VERSION.major >= float(ver):
                             for rename in renames:
                                 if rename[0] in data[0]:
                                     # rename対象のインデックス取得と対象の内容を取得
@@ -4328,7 +4319,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     # 廃止されたColのデータ削除
                     for version, drops in self.dbConfigDropCols.items():
                         # 自身のバージョンが適用されたバージョンより新しければカラムを削除する
-                        if self.VERSION['major'] >= version:
+                        if self.VERSION.major >= version:
                             for drop in drops:
                                 if drop in data[0]:
                                     idx = data[0].index(drop)
@@ -4381,7 +4372,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         globalSettings.update({'severity_color_' + lv: sev['color']})
 
                 # 7.0以降のタイムアウト設定の読み込み
-                if self.VERSION['major'] >= 7.0:
+                if self.VERSION.major >= 7.0:
                     for target, value in self.CONFIG.settings.get('timeout', ZC_TIMEOUT_LOWER).items():
                         target.removeprefix('timeout_')
                         # TIMEOUTの対象か確認
@@ -4424,7 +4415,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     result = (False, 'Failed, Settings/update. %s' % e)
 
             # secret globamacroの追加 secretが5.0以降なので一応確認
-            if result and self.VERSION['major'] >= 5.0:
+            if result and self.VERSION.major >= 5.0:
                 for item in self.CONFIG.secretGlobalmacro:
                     try:
                         # 必要項目があるか確認も込みでgetを使わない
@@ -4483,20 +4474,20 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     if template.get('items'):
                         # 通常アイテム
                         for item in template['items']:
-                            if self.VERSION['major'] >= 6.4:
+                            if self.VERSION.major >= 6.4:
                                 if item.get('type') != 'HTTP_AGENT':
                                     item.pop('request_method', None)
                     if template.get('discovery_rules'):
                         # LLD
                         for rule in template.get('discovery_rules', []):
                             # LLDのアイテム
-                            if self.VERSION['major'] >= 6.4:
+                            if self.VERSION.major >= 6.4:
                                 if rule.get('type') != 'HTTP_AGENT':
                                     rule.pop('request_method', None)
                             if rule.get('item_prototypes'):
                                 # アイテムのプロトタイプ
                                 for item in rule['item_prototypes']:
-                                    if self.VERSION['major'] >= 6.4:
+                                    if self.VERSION.major >= 6.4:
                                         if item.get('type') != 'HTTP_AGENT':
                                             item.pop('request_method', None)
                     templates.append(template)
@@ -4504,11 +4495,11 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             elif method == 'mediatype':
                 for item in data:
                     mediatype = item['DATA']
-                    if self.VERSION['major'] >= 6.0:
+                    if self.VERSION.major >= 6.0:
                         # 6.0対応 content-type入りだと失敗するので削除
                         if mediatype.get('type') == 'SCRIPT':
                             mediatype.pop('content_type', None)
-                    if self.VERSION['major'] >= 6.4:
+                    if self.VERSION.major >= 6.4:
                         # 6.4対応 SCRIPTが順序データ入りになった
                         if mediatype.get('type') == 'SCRIPT':
                             idx = 0
@@ -4521,7 +4512,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                                         params.append(param)
                                 idx += 1
                             mediatype.update({'parameters': params})
-                    if self.VERSION['major'] >= 7.0:
+                    if self.VERSION.major >= 7.0:
                         # 7.0 content_type完全廃止
                         mediatype.pop('content_type', None)
                 # mediatypeの表記ゆれ対応
@@ -4576,7 +4567,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             # インポートエラーが一つでも出ると全部巻き込まれるので、１つずつ入れることにした
             count = 0
             while len(items) > count:
-                if self.VERSION['major'] in [6.0, 7.0]:
+                if self.VERSION.major in [6.0, 7.0]:
                     # 6.0/7.0だとこっちで依存関係のは問題なく全部入る
                     # なんで？？？？
                     iData = {
@@ -4589,7 +4580,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     else:
                         importData[0].pop('value_maps', None)
                     importData.append(iData)
-                elif self.VERSION['major'] == 5.4:
+                elif self.VERSION.major == 5.4:
                     # 5.0はvaluemapが別になっているので5.4はテンプレート側処理時に必要になる
                     self.importRules['triggers']['createMissing'] = False
                     importData.append(
@@ -4601,14 +4592,14 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 else:
                     # trigger prototype内の依存関係以外はこれで入る
                     self.importRules['triggers']['createMissing'] = False
-                    if self.VERSION['major'] == 4.2:
+                    if self.VERSION.major == 4.2:
                         # 4.2だけこれが消えてる
                         self.importRules['templateLinkage'].pop('deleteMissing', None)
                     importData.append({'templates': [items[count]]})
                 count += 1
 
         # マスターのバージョンが6.2未満でノード側が6.2以上の場合
-        if self.getLatestVersion('MASTER_VERSION') < 6.2 and self.VERSION['major'] >= 6.2:
+        if self.getLatestVersion('MASTER_VERSION') < 6.2 and self.VERSION.major >= 6.2:
             templateGroup = [item['name'] for item in templateGroup]
             templateGroup = set(sorted(templateGroup))
             # ホストグループの内templateGroupにあるものは除外
@@ -4664,7 +4655,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 return (False, 'Failed Convert ImportFile: %s' % self.getLatestVersion('VERSION_ID'))
             # インポート実行
             try:
-                result = self.ZAPI.configuration['import'](
+                result = self.ZAPI.configuration.import_(
                     **{
                         'format': 'json',
                         'rules': self.importRules,
@@ -4898,7 +4889,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         hostIf['useip'] = 1
                         hostIf.pop('dns', None)
                 # 5.0対応
-                if self.VERSION['major'] >= 5.0:
+                if self.VERSION.major >= 5.0:
                     # bulkがdetailsの中に移動なので削除
                     hostIf.pop('bulk', None)
                     # SNMPは接続設定detailsが追加、他のインターフェイスはあっても無視される
@@ -4917,7 +4908,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     bulk = hostIf.get('bulk', 'YES')
                     hostIf['bulk'] = Y_N[bulk] if not bulk.isdigit() else bulk
             # Proxy変換
-            if self.VERSION['major'] >= 7.0:
+            if self.VERSION.major >= 7.0:
                 if self.getLatestVersion('MASTER_VERSION') >= 7.0:
                     # 7.0対応 プロキシグループとの区別が追加
                     # 各所で表記ブレブレなのどうにかしてよ……
@@ -5432,12 +5423,12 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         # グループID
         gIds = 'groupids'
         # 6.0対応
-        if self.VERSION['major'] >= 6.0:
+        if self.VERSION.major >= 6.0:
             gIds = 'groups' 
 
         targets = [item['ZABBIX_ID'] for item in self.LOCAL['hostgroup'].values()]
         # 6.0対応
-        if self.VERSION['major'] >= 6.0:
+        if self.VERSION.major >= 6.0:
             idName = self.getKeynameInMethod('hostgroup', 'id')
             targets = [{idName: id} for id in targets]
 
@@ -5492,7 +5483,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         mediaSettings = self.CONFIG.mediaSettings
         # {メディア：対象ユーザーデータ}になっているのを{ユーザー：[メディア]}に変換
         # 6.2対応
-        if self.VERSION['major'] >= 6.2:
+        if self.VERSION.major >= 6.2:
             userMedias = 'medias'
         else:
             userMedias = 'user_medias'
@@ -5580,7 +5571,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         [data.update(item['DATA']) for item in self.STORE['authentication']]
         # 6.2以下対応
         # ディレクトリサービス認証を使用しない場合は削除
-        if self.VERSION['major'] <= 6.2:
+        if self.VERSION.major <= 6.2:
             if not int(data.get('idap_configured', 0)):
                 for param in self.discardParameter['authentication']['ldap']:
                     data.pop(param, None)
@@ -5590,8 +5581,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     data.pop(param, None)
                 data.pop('saml_auth_enabled', None)
         # 6.2対応
-        if self.VERSION['major'] >= 6.2:
-            if self.VERSION['major'] == 6.2:
+        if self.VERSION.major >= 6.2:
+            if self.VERSION.major == 6.2:
                 # バグってLDAPサーバーが設定されていないと０でも１でも弾くので削除、バーカバーカ
                 data.pop('authentication_type', None)
             if self.getLatestVersion('MASTER_VERSION') < 6.2:
@@ -5618,7 +5609,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             data['ldap_userdirectoryid'] = res['userdirectoryids'][0]
     
         # 6.4対応
-        if self.VERSION['major'] >= 6.4:
+        if self.VERSION.major >= 6.4:
             # 古いバージョンのパラメーターだったら変換
             value = data.pop('ldap_configured', None)
             if value:
@@ -5671,7 +5662,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 # LDAP/SAMLどちらも利用しない場合
                 data.pop('disabled_usrgrpid', None)
         # 7.0対応
-        if self.VERSION['major'] >= 7.0:
+        if self.VERSION.major >= 7.0:
             # MFA利用
             if int(data.get('mfa_status', 0)) == 0:
                 data.pop('mfa_status', None)
@@ -5705,7 +5696,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             ファンクション内CheckNow実行ファンクション
             '''
             # 5.0.5対応
-            if self.VERSION['major'] >= 5.0 and self.VERSION['minor'] >= 5:
+            if self.VERSION.major >= 5.0 and self.VERSION.minor >= 5:
                 option = []
                 for target in targets:
                     option.append(
@@ -5757,7 +5748,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         # LLDを検索
         output = ['itemid']
         # 4.2対応
-        if self.VERSION['major'] >= 4.2:
+        if self.VERSION.major >= 4.2:
             output.append('master_itemid')
         try:
             targets = self.ZAPI.discoveryrule.get(
@@ -5910,12 +5901,6 @@ def inputParameters():
     connectionGroup.add_argument(
         '-t', '--token',
         help='複製実行ユーザーのトークン'
-    )
-    connectionGroup.add_argument(
-        '--http-auth',
-        action='store_const',
-        const='YES',
-        help='HTTP AUTHを利用する'
     )
     connectionGroup.add_argument(
         '--self-cert',
