@@ -4495,6 +4495,9 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             elif method == 'mediatype':
                 for item in data:
                     mediatype = item['DATA']
+                    if mediatype['type'] == 'EMAIL' and not mediatype.get('username'):
+                        mediatype['username'] = ''
+                        mediatype['password'] = ''
                     if self.VERSION.major >= 6.0:
                         # 6.0対応 content-type入りだと失敗するので削除
                         if mediatype.get('type') == 'SCRIPT':
@@ -4515,8 +4518,6 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     if self.VERSION.major >= 7.0:
                         # 7.0 content_type完全廃止
                         mediatype.pop('content_type', None)
-                # mediatypeの表記ゆれ対応
-
                 importData['media_types'] = [item['DATA'] for item in data]
             else:
                 importData[section] = [item['DATA'] for item in data]
@@ -4572,8 +4573,9 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     # なんで？？？？
                     iData = {
                         'templates': [items[count]],
-                        'triggers': triggers
                     }
+                    if self.VERSION.major < 7.0:
+                        iData['triggers'] = triggers
                     # マスターのバージョンが6.0未満だとvalue_mapsがtemplatesに必要
                     if self.getLatestVersion('MASTER_VERSION') < 6.0:
                         iData['value_maps'] = importData[0].get('value_maps')
