@@ -4563,6 +4563,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         # さらにそれぞれのグループをZC_TEMPLATE_SEPARATEずつ分離してimportDataに追加
         # 一応0から順にソートする
         count = 0
+        self.importRules['triggers']['createMissing'] = False
         for group in sorted(groups.keys()):
             items = groups[group]
             # インポートエラーが一つでも出ると全部巻き込まれるので、１つずつ入れることにした
@@ -4570,12 +4571,10 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             while len(items) > count:
                 if self.VERSION.major in [6.0, 7.0]:
                     # 6.0/7.0だとこっちで依存関係のは問題なく全部入る
-                    # なんで？？？？
                     iData = {
                         'templates': [items[count]],
+                        'triggers': triggers
                     }
-                    if self.VERSION.major < 7.0:
-                        iData['triggers'] = triggers
                     # マスターのバージョンが6.0未満だとvalue_mapsがtemplatesに必要
                     if self.getLatestVersion('MASTER_VERSION') < 6.0:
                         iData['value_maps'] = importData[0].get('value_maps')
@@ -4584,7 +4583,6 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     importData.append(iData)
                 elif self.VERSION.major == 5.4:
                     # 5.0はvaluemapが別になっているので5.4はテンプレート側処理時に必要になる
-                    self.importRules['triggers']['createMissing'] = False
                     importData.append(
                         {
                             'templates': [items[count]],
@@ -4593,7 +4591,6 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     )
                 else:
                     # trigger prototype内の依存関係以外はこれで入る
-                    self.importRules['triggers']['createMissing'] = False
                     if self.VERSION.major == 4.2:
                         # 4.2だけこれが消えてる
                         self.importRules['templateLinkage'].pop('deleteMissing', None)
