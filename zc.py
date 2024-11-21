@@ -2178,7 +2178,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         # トークンで認証確認
         if token:
             try:
-                API.login(api_token=token)
+                API.login(token=token)
                 if not self.CONFIG.updatePassword:
                     # トークンで認証したのでパスワード認証しない
                     auth = None
@@ -2198,7 +2198,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 if token == '':
                     # 一度はトークン認証通しているのでそちらで認証しなおし（トークン優先）
                     token = self.CONFIG.token
-                    API.login(token)
+                    API.login(token=token)
             except Exception as e:
                 if self.CONFIG.updatePassword:
                     pass
