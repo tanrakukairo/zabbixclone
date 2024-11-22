@@ -136,8 +136,8 @@ def CHECK_ZABBIX_SERVER_NAME(endpoint, name):
     res = re.findall(f'{prefix}[a-zA-Z0-9-]*{suffix}', res.text)
     if not res:
         return (False, 'Not Find ServerName.')
-    res = res[0].removeprefix(prefix)
-    res = res.removesuffix(suffix)
+    res = res[0].replace(prefix, '')
+    res = res.replace(suffix, '')
     if res != name:
         return (False, f'Wrong Target Node {name}.')
     return ZC_COMPLETE
@@ -1136,6 +1136,14 @@ class ZabbixCloneParameter():
                         'options': {
                             'output': 'extend'
                         }
+                    },
+                    'connector': {
+                        'id': 'connectorid',
+                        'name': 'name',
+                        'options': {
+                            'output': 'extend',
+                            'selectTags': 'extnd',
+                        }
                     }
                 }
             )
@@ -1733,7 +1741,7 @@ class ZabbixCloneDatastore():
         # タイムスタンプの取得
         for file in files:
             desc = file
-            file = file.removesuffix('.bz2').split('_')
+            file = file.replace('.bz2', '').split('_')
             if version:
                 if version != file[0]:
                     continue
@@ -3931,6 +3939,92 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         self.STORE['mfa'] = items
         return result
 
+    def processingConnector(self):
+        '''
+        ストアのConnectorデータを加工
+        '''
+        result = ZC_COMPLETE
+        if not self.STORE.get('connector'):
+            return (True, 'No Data, connector')
+        
+        items = []
+        deleteTarget = []
+        try:
+            for item in self.STORE['connector'].copy():
+                data = item['DATA']
+                name = item['NAME']
+                if self.checkMasterNode():
+                    # IDの変換関連
+                    pass
+                else:
+                    if data['status'] == '0':
+                        # 無効アイテムは移植しない
+                        continue
+                    # 多分今後protocolが増えると要不要の判断が必要になると思う
+                    # if int(data.get('protocol', 0)) > 0:
+                    # 送信種別
+                    if int(data.get('data_type', 0)) == 1:
+                        # Eventで不要要素の削除
+                        data.pop('item_value_type', None)
+                    # 試行回数インターバル
+                    if int(data.get('max_attempts', 1)) == 1:
+                        data.pop('attempt_interval', None)
+                    # 認証情報ごとの必要な情報以外の削除
+                    auth = int(data.get('authtype', 0))
+                    if auth:
+                        if auth == 5:
+                            # Bearer
+                            data.pop('username', None)
+                            data.pop('password', None)
+                        else:
+                            # Basic:1 / NTLM:2 / Kerberos:3 / Digest:4
+                            data.pop('token', None)
+                items.append(item)
+            connectors = [item['NAME'] for item in items]
+            for connector, item in self.LOCAL.get('connector', {}).items():
+                if connector not in connectors:
+                    deleteTarget.append(item['ZABBIX_ID'])
+        except Exception as e:
+            return (False, 'processingConnector: %s' % e)
+        self.STORE['connector'] = items
+        if deleteTarget:
+            self.STORE['connectorExtend'] = [{'delete': deleteTarget}]
+            self.sections['EXTEND'].append('connectorExtend')
+        return result
+
+    '''
+    def processingNewmethod(self):
+        # ストアのConnectorデータを加工
+        result = ZC_COMPLETE
+        if not self.STORE.get('newmethod'):
+            return (True, 'No Data, newmethod')
+        
+        items = []
+        deleteTarget = []
+        try:
+            for item in self.STORE['newmethod'].copy():
+                data = item['DATA']
+                name = item['NAME']
+                if self.checkMasterNode():
+                    # IDの変換関連
+                    pass
+                else:
+                    # 不要要素の削除
+                    pass
+                items.append(item)
+            newmethods = [item['NAME'] for item in items]
+            for name, item in self.LOCAL.get('newmethod', {}).items():
+                if name not in newmethods:
+                    deleteTarget.append(item['ZABBIX_ID'])
+        except Exception as e:
+            return (False, 'processingConnector: %s' % e)
+        self.STORE['newmethod'] = items
+        if deleteTarget:
+            self.STORE['newmethodExtend'] = [{'delete': deleteTarget}]
+            self.sections['EXTEND'].append('newmethodExtend')
+        return result
+    '''
+
     def processingAuthentication(self):
         '''
         ストアのAuthenticationデータを加工
@@ -4374,7 +4468,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 # 7.0以降のタイムアウト設定の読み込み
                 if self.VERSION.major >= 7.0:
                     for target, value in self.CONFIG.settings.get('timeout', ZC_TIMEOUT_LOWER).items():
-                        target.removeprefix('timeout_')
+                        target.replace('timeout_', '')
                         # TIMEOUTの対象か確認
                         if target not in self.timeoutTarget:
                             continue
@@ -4754,7 +4848,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
 
         for method in sections:
             items = []
-            api = getattr(self.ZAPI, method.removesuffix('Extend'))
+            api = getattr(self.ZAPI, method.replace('Extend', ''))
             # データ操作
             for item in self.STORE.get(method, []):
                 if item.get('delete'):
@@ -4808,7 +4902,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         res = 'C' if 'create' in function else 'U'
                 except Exception as e:
                     res = 'X'                   
-                    result = (False, 'setApiToZabbix, %s.%s, %s' % (method.removesuffix('Extend'), function, e))
+                    result = (False, 'setApiToZabbix, %s.%s, %s' % (method.replace('Extend', ''), function, e))
 
                 # 表示（仮）
                 print(f'{res}', end='', flush=True)
@@ -4932,7 +5026,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             # テンプレートとホストグループのID変換
             for method in ['template', 'hostgroup']:
                 section = method + 's'
-                section = section.removeprefix('host')
+                section = section.replace('host', '')
                 id = self.getKeynameInMethod(method, 'id')
                 data[section] = [
                     {
@@ -5591,11 +5685,11 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         'name': 'LDAP Converted 6.0 -> 6.2 later by ZC'
                     }
                     for param in self.discardParameter['authentication']['ldap']:
-                        value = data.pop(param, '').removeprefix('ldap_')
+                        value = data.pop(param, '').replace('ldap_', '')
                         if value:
                             ldapParams.update(
                                 {
-                                    param.removeprefix('ldap_'): value
+                                    param.replace('ldap_', ''): value
                                 }
                             )
                     if ldapParams.get('host'):
@@ -5621,11 +5715,11 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         'idp_type': 1
                     }
                     for param in self.discardParameter['authentication']['saml']:
-                        value = data.pop(param, '').removeprefix('saml_')
+                        value = data.pop(param, '').replace('saml_', '')
                         if value:
                             samlParams.update(
                                 {
-                                    param.removeprefix('saml_'): value
+                                    param.replace('saml_', ''): value
                                 }
                             )
                     if samlParams.get('idp_entityid'):
@@ -5814,7 +5908,7 @@ def inputParameters():
         env = env.upper()
         if not re.match(ZC_HEAD, env):
             continue
-        env = env.removeprefix(ZC_HEAD).lower()
+        env = env.replace(ZC_HEAD, '').lower()
         if re.match('^[a-z]*_connect_', env):
             env = env.split('_')
             params['_'.join(env[:2])].update(
