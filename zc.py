@@ -1142,7 +1142,7 @@ class ZabbixCloneParameter():
                         'name': 'name',
                         'options': {
                             'output': 'extend',
-                            'selectTags': 'extnd',
+                            'selectTags': 'extend',
                         }
                     }
                 }
@@ -3994,7 +3994,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
 
     '''
     def processingNewmethod(self):
-        # ストアのConnectorデータを加工
+        # ストアのデータを加工テンプレート
         result = ZC_COMPLETE
         if not self.STORE.get('newmethod'):
             return (True, 'No Data, newmethod')
