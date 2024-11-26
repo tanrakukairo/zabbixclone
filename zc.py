@@ -52,8 +52,9 @@ PHP_WORKER_NUM = 4
 
 # ZabbixCloneパラメーター
 ZC_DEFAULT_ZABBIX_VERSION = 7.0
-ZC_DEFAULT_NODE = 'zc-default'
-ZC_DERAULT_ROLE = 'worker'
+ZC_SUPPORT_VERSION_LOWER = 4.0
+ZC_DEFAULT_NODE = 'zabbix'
+ZC_DERAULT_ROLE = 'master'
 ZC_HEAD = 'ZC_'
 ZC_UNIQUE_TAG = ZC_HEAD + 'UUID'
 ZC_CONFIG = 'zc.conf'
@@ -63,7 +64,6 @@ ZC_NOTICE = 'Email'
 ZC_NOTICE_USER = ZABBIX_SUPER_USER
 ZC_NOTICE_TO = 'alert@example.com'
 ZC_DEFAULT_STORE = 'file'
-ZC_ALL_ALLOW_ROLE = ['master', 'replica']
 ZC_NO_NOTICE_ROLE = ['replica']
 ZC_COMPLETE = (True, 'Complete.')
 ZC_TEMPLATE_SEPARATE = 100
@@ -343,7 +343,7 @@ class ZabbixCloneConfig():
         # MFAシークレット情報
         self.mfaClientSecret = CONFIG.get('mfa_client_secret', {})
         # テンプレートのスキップ
-        self.templateSkip = True if CONFIG.get('template_skip', 'NO') == 'YES' else False
+        self.templateSkip = True if CONFIG.get('template_skip', 'YES') == 'YES' else False
         if self.forceInitialize:
             self.templateSkip = False
         # テンプレートのエクスポート時の区切り数
@@ -511,6 +511,9 @@ class ZabbixCloneParameter():
                 'minor': 0
             }
 
+        if version['major'] < ZC_SUPPORT_VERSION_LOWER:
+            sys.exit('Out of support version: %s' % version['major'])
+
         # ベース:4.0
         methodParameters = {
             'hostgroup': {
@@ -637,8 +640,7 @@ class ZabbixCloneParameter():
                 'options': {
                     'output': 'extend',
                     'selectOperations': 'extend',
-                    'selectFilter': 'extend',
-                    'filter': {'status': ZABBIX_ENABLE}
+                    'selectFilter': 'extend'
                 }
             },
             # Triggerはテンプレートに紐づいているものだけしかとらないのでAPIで取得しないようここには設定しない
@@ -1103,7 +1105,7 @@ class ZabbixCloneParameter():
             
         # 7.0対応
         # 追加Method
-        addMethods[7.0] = ['proxygroup', 'mfa']
+        addMethods[7.0] = ['proxygroup', 'mfa', 'connector']
         if version['major'] >= 7.0:
             # プロキシグループの追加
             # プロキシの設定大幅変更のため入れ替え
@@ -1147,6 +1149,8 @@ class ZabbixCloneParameter():
                     }
                 }
             )
+            # connectorは他と連携がない
+            sections['PRE'].append('connector')
             # proxyより先にproxygroupを処理する
             sections['PRE'].remove('proxy')
             sections['PRE'].append('proxygroup')
@@ -2156,6 +2160,9 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         '''
         return True if self.CONFIG.role == 'master' else False
 
+    def checkReplicaNode(self):
+        return True if self.CONFIG.role == 'replica' else False
+
     def initZabbixApi(self):
         '''
         pyZabbixのクライアントイニシャライズ
@@ -2355,8 +2362,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         else:
             result = self.getVersionFromStore()
             if result[0]:
-                if not self.VERSIONS:
-                    if self.checkMasterNode():
+                if self.checkMasterNode():
+                    if not self.VERSIONS:
                         # これから作るので仮バージョンを生成
                         self.VERSIONS = [
                             {
@@ -2366,21 +2373,20 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                                 'DESCRIPTION': ''
                             }
                         ]
-                    else:
+                else:
+                    if not self.VERSIONS:
                         # ワーカー側はストアのバージョンデータがないので実行不可
                         result = (False, 'No Exist On-Store Versions.')
-                else:
-                    pass
+                    elif self.VERSION.major < self.getLatestVersion('MASTER_VERSION'):
+                        # ワーカーのZabbixバージョンがマスターのZabbixバージョンより古い場合は終了
+                        result = (False, '%s zabbix version > Onstore Data zabbix version.' % self.CONFIG.node)
+                    else:
+                        pass
             else:
                 # 取得失敗
                 result = (False, 'Failed Get Versions.')
-
         if not result[0]:
             return result
-
-        # ワーカーのZabbixバージョンがマスターのZabbixバージョンより古い場合は終了
-        if not self.checkMasterNode and self.VERSION.major < self.getLatestVersion('MASTER_VERSION'):
-            return (False, '%s zabbix version > Onstore Data zabbix version.' % self.CONFIG.node)
 
         # データの初回取得
         result = self.getDataFromZabbix()
@@ -2454,6 +2460,10 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
 
         else:
             # ワーカーノード側処理
+            if self.getLatestVersion('MASTER_VERSION') == 4.0:
+                # マスターバージョンが4.0の場合、ZC_UUIDが存在しないのでホスト強制アップデートモードにする
+                self.CONFIG.forceHostUpdate == True
+
             # 適用バージョンの確認
             version = self.CONFIG.targetVersion
             if version is None:
@@ -2494,7 +2504,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         # バージョン文字列が不正なので初期化対象
                         nowVersion = None
                         # 初期化対象はテンプレートインポートスキップキャンセル
-                        self.CONFIG.templateSkip = False
+                        # self.CONFIG.templateSkip = False
             if nowVersion:
                 # ワーカーノードの設定削除否定フラグ
                 if not self.CONFIG.noDelete:
@@ -2529,7 +2539,19 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 print(f'{TAB*3}Method Data Clear:', flush=True)
 
                 # イニシャライズ対象のメソッド、グループは要素があると消せないので最後に消す
-                methods = ['usermacro', 'correlation', 'drule', 'mediatype', 'action', 'script', 'maintenance', 'host', 'proxy', 'template', 'hostgroup']
+                methods = [
+                    'usermacro',
+                    'correlation',
+                    'drule',
+                    'mediatype',
+                    'action',
+                    'script',
+                    'maintenance',
+                    'host',
+                    'proxy',
+                    'template',
+                    'hostgroup'
+                ]
                 # 6.0対応
                 if self.VERSION.major >= 6.0:
                     methods = ['service', 'sla', 'regexp'] + methods
@@ -2546,6 +2568,9 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 # 7.0対応
                 if self.VERSION.major >= 7.0:
                     methods.append('proxygroup')
+                # テンプレート削除スキップ
+                if self.CONFIG.templateSkip:
+                    methods.remove('template')
                 # ZABBIXデフォルト設定の削除
                 for method in methods:
                     api = getattr(self.ZAPI, method)
@@ -2828,10 +2853,14 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         try:
             for item in self.STORE['action'].copy():
                 data = item['DATA']
-                # 有効でないアクションは除外
-                if data['status'] == ZABBIX_DISABLE:
-                    continue
-
+                if self.checkMasterNode() or self.checkReplicaNode():
+                    # マスター/レプリカ処理
+                    pass
+                else:
+                    # ワーカー処理
+                    if data['status'] == ZABBIX_DISABLE:
+                        # 有効でないアクションは除外
+                        continue
                 # キー名ゆれ対応
                 operateType = ['operations', 'recoveryOperations', 'acknowledgeOperations']
                 for target in operateType.copy():
@@ -3957,7 +3986,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     # IDの変換関連
                     pass
                 else:
-                    if data['status'] == '0':
+                    if not self.checkReplicaNode() and data['status'] == '0':
                         # 無効アイテムは移植しない
                         continue
                     # 多分今後protocolが増えると要不要の判断が必要になると思う
@@ -4933,16 +4962,16 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             data = host['DATA']
             # 適用可能ホストの判定:ZC_WORKERタグのバリューを利用する
             monitorNode = [tag.get('value') for tag in data.get('tags', []) if tag.get('tag') == ZC_MONITOR_TAG]
-            hUuid = [tag.get('value') for tag in data.get('tags', []) if tag.get('tag') == ZC_UNIQUE_TAG]
-            hUuid = hUuid[0] if hUuid else None
-            if self.CONFIG.node in monitorNode and self.CONFIG.role == ZC_DERAULT_ROLE:
+            hostUuid = [tag.get('value') for tag in data.get('tags', []) if tag.get('tag') == ZC_UNIQUE_TAG]
+            hostUuid = hostUuid[0] if len(hostUuid) == 1 else None
+            if self.checkMasterNode() or self.checkReplicaNode():
+                # masterとreplicaはそのまま適用
+                pass
+            elif self.CONFIG.node in monitorNode:
                 # 監視有効で適用するホスト
                 data.update({'status': ZABBIX_ENABLE})
-            elif self.CONFIG.role in ZC_ALL_ALLOW_ROLE:
-                # 監視無効で適用するホスト
-                data.update({'status': ZABBIX_DISABLE})
             else:
-                # 監視対象ではないので次の処理
+                # このノードの適用対象ではないのでスキップ
                 continue
             # ホスト直設定のアイテム、トリガー、LLDは除外
             [data.pop(section, None) for section in self.discardParameter['host']]
@@ -4950,7 +4979,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             [data.pop(key, None) for key, value in data.copy().items() if not value]
             # インベントリモードの変換:MANUALの場合キーが存在しない
             data['inventory_mode'] = ZABBIX_INVENTORY_MODE.get(data.get('inventory_mode'), ZABBIX_INVENTORY_MODE['MANUAL'])
-            # 4.2対応
+            # 4.2のテンプレート出力対応
             if data.get('inventory'):
                 data['inventory'].pop('inventory_mode', None)
             # インターフェイスの処理
@@ -5038,7 +5067,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 {
                     'name': name,
                     'data': data,
-                    'uuid': hUuid,
+                    'uuid': hostUuid,
                 }
             )
         # create/update/deleteの決定
@@ -5046,7 +5075,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         # {'ZC_UUIDの中身': 'ローカルホストのhostid'}
         hostUuids = {}
         for item in self.LOCAL['host'].values():
-            tags = [tag['value'] for tag in item['DATA']['tags'] if tag['tag'] == ZC_UNIQUE_TAG]
+            tags = [tag['value'] for tag in item['DATA'].get('tags', []) if tag.get('tag') == ZC_UNIQUE_TAG]
             if not tags:
                 continue
             hostUuids.update(
@@ -5071,10 +5100,11 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             localHost = self.LOCAL['host'].get(item['name'])
             idName = self.getKeynameInMethod('host', 'id')
             data = item['data']
+            hostUuid = item['uuid']
             hostId = None
             if localHost:
                 # 同じ名前のホストが既にある
-                if item['uuid'] in hostUuids.keys():
+                if hostUuid in hostUuids.keys():
                     # ZC_UUIDも同じならば更新
                     function = 'update'
                     # 更新対象のIDを入れる
@@ -5105,7 +5135,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         )
             else:
                 # 同じホスト名はない
-                if item['uuid'] in hostUuids:
+                if hostUuid in hostUuids:
                     # ローカルで別のホスト名に変えていた
                     if self.CONFIG.forceHostUpdate:
                         # 強制アップデートの場合はローカルの名前でupdate実行
@@ -6034,17 +6064,20 @@ def inputParameters():
     )
     processingGroup.add_argument(
         '--template-skip',
+        '--skip-template',
         action='store_const',
         const='YES',
         help='テンプレートのインポート/エクスポートをスキップする'
     )
     processingGroup.add_argument(
         '--template-separate',
+        '--separate-template',
         type=int,
         help='テンプレートのエクスポートを区切って処理する数（デフォルト: 100）'
     )
     processingGroup.add_argument(
         '--checknow-execute',
+        '--execute-checknow',
         action='store_const',
         const='YES',
         help='ホスト追加後にLLDや指定監視間隔のアイテムの値取得を実行する'
