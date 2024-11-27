@@ -92,13 +92,15 @@ Checking operation within Windows11pro and alpine:latest container.
 
 ## Requirement
 
-* Zabbix 4.2 Later (host-tag supported)
-* Python 3.9 Later
+* Zabbix 4.0 Later
+* Python 3.x Later
 
 excluding development versions.
 
 Required Python Library:
 * pyzabbix
+
+Requied use Redis/DynamoDB.
 * redis
 * boto3
 
@@ -829,9 +831,10 @@ It is currently unknown if changes to trigger expressions (Zabbix5.4 or later) c
 |5.0|5.4|N/A|OK|-|-|-|
 |5.0|5.2|N/A|OK|-|-|-|
 |5.0|5.0|N/A|OK|-|-|-|
-|4.2|5.0|N/A|OK?|-|-|-|
+|4.0|5.0|N/A|-|-|-|-|
 |4.2|4.4|N/A|OK?|-|-|-|
 |4.2|4.2|N/A|OK?|-|-|-|
+|4.0|4.2|N/A|-|-|-|-|
 
 *1: Only while ZabbixCloud is Zabbix7.0
 
