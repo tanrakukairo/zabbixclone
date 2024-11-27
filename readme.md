@@ -104,7 +104,7 @@ Pythonが動作するOSなら多分どれでも。
 
 Zabbix6.0より前のバージョンはデータベース操作が必要になるので以下のライブラリも必要になります。
 
-* PostgreSQL: psycopg2 (psycopg2-binary)
+* PostgreSQL: psycopg (psycopg-binary) [version 3]
 * MySQL/MariaDB: pymysql
 
 ## 対応するZabbixの設定

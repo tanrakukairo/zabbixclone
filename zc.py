@@ -2287,7 +2287,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
 
         # ポート番号からライブラリの指定
         if self.CONFIG.dbConnect['port'] == 5432:
-            self.CONFIG.dbConnect['library'] = 'psycopg2'
+            self.CONFIG.dbConnect['library'] = 'psycopg'
         elif self.CONFIG.dbConnect['port'] == 3306:
             self.CONFIG.dbConnect['library'] = 'pymysql'
         else:
@@ -2661,14 +2661,27 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             return (False, 'No Exist DB Connection Config.')
         dbConnect = self.CONFIG.dbConnect
 
+        if dbConnect['library'] == 'psycopg':
+            connection = self.dbConnector.connect(
+                host=dbConnect['host'],
+                port=dbConnect['port'],
+                dbname=dbConnect['name'],
+                user=dbConnect['user'],
+                password=dbConnect['password']
+            )
+        elif dbConnect['library'] == 'pymysql':
+            connection = self.dbConnector.connect(
+                host=dbConnect['host'],
+                port=dbConnect['port'],
+                database=dbConnect['name'],
+                user=dbConnect['user'],
+                password=dbConnect['password']
+            )
+        else:
+            return (False, 'Cannnot set DB connection.')
+
         # 操作実行
-        with self.dbConnector.connect(
-            host=dbConnect['host'],
-            port=dbConnect['port'],
-            database=dbConnect['name'],
-            user=dbConnect['user'],
-            password=dbConnect['password']
-        ) as connection:
+        with connection:
             with connection.cursor() as cursor:
                 if operate == 'get':
                     # 取得 
@@ -2681,7 +2694,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         result = (False, 'DB Direct Select %s, Failed.' % table)
                 else:
                     # 自動コミットの停止
-                    if dbConnect['library'] == 'psycopg2':
+                    if dbConnect['library'] == 'psycopg':
                         connection.autocommit = False
                     elif dbConnect['library'] == 'pymysql':
                         connection.autocommit(False)
@@ -2731,6 +2744,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         connection.commit()
                     else:
                         connection.rollback()
+                    if dbConnect['library'] == 'psycopg':
+                        connection.close()
         return result
 
     def replaceIdName(self, method=None, target=None):
@@ -5658,7 +5673,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 for wd, time in value['work_time'].items():
                     if not time:
                         continue
-                    if not re.match('[0-9].\:[0-9].\-[0-9].\:[0-9].', time):
+                    if not re.match(r'[0-9].\:[0-9].\-[0-9].\:[0-9].', time):
                         continue
                     period.append('{0},{1}'.format(ZABBIX_WEEKDAY[wd.upper()], time))
                 media = {

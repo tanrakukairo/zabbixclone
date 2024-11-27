@@ -106,7 +106,7 @@ Requied use Redis/DynamoDB.
 
 Required extra libraries for Versions before Zabbix 6.0.
 
-* PostgreSQL: psycopg2 (psycopg2-binary)
+* PostgreSQL: psycopg (psycopg-binary) [version 3]
 * MySQL/MariaDB: pymysql
 
 ## Supported Zabbix Configuration
