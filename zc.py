@@ -8,8 +8,8 @@ Released under the MIT license
 https://opensource.org/licenses/mit-license.php
 '''
 __author__ = 'tsuno.teppei'
-__version__ = '0.1.0'
-__date__ = '2024/10/23'
+__version__ = '0.1.8'
+__date__ = '2024/11/27'
 
 import os
 import sys
@@ -306,7 +306,7 @@ class ZabbixCloneConfig():
         # 監視対象のアップデート許可
         self.forceHostUpdate = True if CONFIG.get('force_host_update', 'NO') == 'YES' else False
         # ストアデータにない対象の削除を行わない
-        self.noDelete = True if CONFIG.get('no_delete', 'NO') == 'YES' else False
+        self.noDelete = True if CONFIG.get('no_delete', 'YES') == 'YES' else False
         # checknow実行
         self.checknowExec = True if CONFIG.get('checknow_execute', 'NO') == 'YES' else False
         # checknowの対象インターバル
@@ -343,11 +343,13 @@ class ZabbixCloneConfig():
         # MFAシークレット情報
         self.mfaClientSecret = CONFIG.get('mfa_client_secret', {})
         # テンプレートのスキップ
-        self.templateSkip = True if CONFIG.get('template_skip', 'YES') == 'YES' else False
-        if self.forceInitialize:
-            self.templateSkip = False
+        defSkip = 'YES' if self.role == 'worker' else 'NO'
+        self.templateSkip = True if CONFIG.get('template_skip', defSkip) == 'YES' else False
         # テンプレートのエクスポート時の区切り数
         self.templateSeparate = CONFIG.get('template_separate', ZC_TEMPLATE_SEPARATE)
+        # 強制初期化時の変更項目
+        if self.forceInitialize:
+            self.templateSkip = False
 
         return ZC_COMPLETE
 
@@ -2504,7 +2506,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         # バージョン文字列が不正なので初期化対象
                         nowVersion = None
                         # 初期化対象はテンプレートインポートスキップキャンセル
-                        # self.CONFIG.templateSkip = False
+                        self.CONFIG.templateSkip = False
             if nowVersion:
                 # ワーカーノードの設定削除否定フラグ
                 if not self.CONFIG.noDelete:
@@ -2570,7 +2572,10 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     methods.append('proxygroup')
                 # テンプレート削除スキップ
                 if self.CONFIG.templateSkip:
+                    methods.remove('hostgroup')
                     methods.remove('template')
+                    if self.VERSION.major >= 6.2:
+                        methods.remove('templategroup')
                 # ZABBIXデフォルト設定の削除
                 for method in methods:
                     api = getattr(self.ZAPI, method)
@@ -6058,15 +6063,13 @@ def inputParameters():
     )
     processingGroup.add_argument(
         '--no-delete',
-        action='store_const',
-        const='YES',
+        choices=['YES', 'NO'],
         help='マスターノードの設定に存在しない監視設定を削除しない'
     )
     processingGroup.add_argument(
         '--template-skip',
         '--skip-template',
-        action='store_const',
-        const='YES',
+        choices=['YES', 'NO'],
         help='テンプレートのインポート/エクスポートをスキップする'
     )
     processingGroup.add_argument(
