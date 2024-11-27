@@ -2417,48 +2417,48 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
 
         if self.checkMasterNode():
             # マスターノードの処理
-            # ホストに管理UUIDタグをつける
-            # ワーカーでアップデートするときにホストのユニーク情報として使う予定（ホスト名変更があるとZCではわからないので）
-            
-            # 表示（仮）
-            print(f'\n{TAB*2}Set Host UUID:', end='', flush=True)
-            count = 0
 
-            for item in self.LOCAL['host'].values():
-                # ユニーク識別のタグが付いていないことを確認
-                if ZC_UNIQUE_TAG not in [tag['tag'] for tag in item['DATA']['tags']]:
-                    # UUIDを生成して追加
-                    item['DATA']['tags'].append(
-                        {
-                            'tag': ZC_UNIQUE_TAG,
-                            'value': str(uuid.uuid4())
+            # 4.2以降
+            if self.VERSION.major >= 4.2:
+                # ホストに管理UUIDタグをつける
+                # ワーカーでアップデートするときにホストのユニーク情報として使う予定（ホスト名変更があるとZCではわからないので）
+                # 表示（仮）
+                print(f'\n{TAB*2}Set Host UUID:', end='', flush=True)
+                count = 0
+                for item in self.LOCAL['host'].values():
+                    # ユニーク識別のタグが付いていないことを確認
+                    if ZC_UNIQUE_TAG not in [tag['tag'] for tag in item['DATA']['tags']]:
+                        # UUIDを生成して追加
+                        item['DATA']['tags'].append(
+                            {
+                                'tag': ZC_UNIQUE_TAG,
+                                'value': str(uuid.uuid4())
+                            }
+                        )
+                        idName = self.getKeynameInMethod('host', 'id')
+                        option = {
+                            idName: item['ZABBIX_ID'],
+                            'tags': item['DATA']['tags']
                         }
-                    )
-                    idName = self.getKeynameInMethod('host', 'id')
-                    option = {
-                        idName: item['ZABBIX_ID'],
-                        'tags': item['DATA']['tags']
-                    }
-                    try:
-                        # 適用実行
-                        self.ZAPI.host.update(**option)
-                        result = ZC_COMPLETE
-                    except Exception as e:
-                        result = (False, 'Failed, firstProcess set host uuid-tag. %s' % e)
-                        
-                    # 表示（仮）
-                    if count == WIDE_COUNT or count == 0:
-                        print(f'\n{TAB*3}', end='', flush=True)
-                        count = T_COUNT*3
-                    res = 'S' if result[0] else 'X'
-                    print(f'{res}', end='', flush=True)
-                    count += 1
-                
-            # 表示（仮）
-            if count:
-                print('')
-            else:
-                print(' Already set All Hosts.')
+                        try:
+                            # 適用実行
+                            self.ZAPI.host.update(**option)
+                            result = ZC_COMPLETE
+                        except Exception as e:
+                            result = (False, 'Failed, firstProcess set host uuid-tag. %s' % e)
+                            
+                        # 表示（仮）
+                        if count == WIDE_COUNT or count == 0:
+                            print(f'\n{TAB*3}', end='', flush=True)
+                            count = T_COUNT*3
+                        res = 'S' if result[0] else 'X'
+                        print(f'{res}', end='', flush=True)
+                        count += 1
+                # 表示（仮）
+                if count:
+                    print('')
+                else:
+                    print(' Already set All Hosts.')
 
         else:
             # ワーカーノード側処理
