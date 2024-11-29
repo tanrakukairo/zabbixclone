@@ -2678,7 +2678,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 password=dbConnect['password']
             )
         else:
-            return (False, 'Cannnot set DB connection.')
+            return (False, 'Cannot set DB connection.')
 
         # 操作実行
         with connection:
@@ -2870,17 +2870,27 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
 
 
         items = []
+        updateAction = False
         try:
             for item in self.STORE['action'].copy():
                 data = item['DATA']
-                if self.checkMasterNode() or self.checkReplicaNode():
-                    # マスター/レプリカ処理
+                if self.checkMasterNode():
+                    # マスター
                     pass
                 else:
-                    # ワーカー処理
-                    if data['status'] == ZABBIX_DISABLE:
-                        # 有効でないアクションは除外
-                        continue
+                    if self.checkReplicaNode():
+                        # レプリカ処理
+                        pass
+                    else:
+                        # ワーカー処理
+                        if data['status'] == ZABBIX_DISABLE:
+                            # 有効でないアクションは除外
+                            continue
+                    # updateで不要なeventsource削除のためのフラグ
+                    if item['NAME'] in self.LOCAL['action'].keys():
+                        updateAction = True
+                    else:
+                        updateAction = False
                 # キー名ゆれ対応
                 operateType = ['operations', 'recoveryOperations', 'acknowledgeOperations']
                 for target in operateType.copy():
@@ -2902,6 +2912,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         operateType.append(rename)
 
                 eventSource = int(data['eventsource'])
+                if updateAction:
+                    data.pop('eventsource', None)
                 # トリガーアクション以外で不要なものの削除
                 if eventSource != 0:
                     [data.pop(param, None) for param in discardNotTriggerAction]
@@ -3188,6 +3200,9 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     else:
                         hosts = 'hosts'
                         groups = 'groups'
+                    if not data.get(groups) and not data.get(hosts):
+                        # グループもホストも空の場合はスキップ
+                        continue
                     # マスターノード側処理: 対象リストをIDのみに変換
                     # ホストグループリスト
                     name = self.getKeynameInMethod('hostgroup', 'name')
@@ -3219,6 +3234,9 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             hosts: 'hosts',
                             groups: 'groups'
                         }
+                    if not data.get(groups) and not data.get(hosts):
+                        # グループもホストも空の場合はスキップ
+                        continue
                     # ワーカーノード側処理: 対象リストの中を{idName: id}に変換
                     for section in [groups, hosts]:
                         targets = data.pop(storeIds[section], [])
@@ -3230,9 +3248,6 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                                     id: self.replaceIdName(method, target)
                                 } for target in targets if self.replaceIdName(method, target)
                             ]
-                if not data.get(groups) and not data.get(hosts):
-                    # グループもホストも空の場合はスキップ
-                    continue
                 items.append(item)
         except Exception as e:
             result = (False, 'processingMaintenance: %s' % e)
@@ -4413,9 +4428,10 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             dbDirect = {}
             expressions = []
 
+            tables = ['config', 'expressions', 'regexps']
             names = [item['NAME'] for item in self.STORE['database']]
             # 処理順を固定
-            for table in ['config', 'expressions', 'regexps']:
+            for table in tables:
                 data = self.STORE['database'][names.index(table)]
                 if not data:
                     continue
@@ -4572,7 +4588,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         result = (False, 'Failed, Secret Globalmacro/create %s. %s' % (item, e))
         else:
             # データベース直の適用実行
-            for table, data in dbDirect.items():
+            for table in reversed(tables):
+                data = dbDirect[table]
                 if table == 'config':
                     result = self.operateDbDirect('update', table, data)
                 else:
@@ -4600,6 +4617,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
 
         # データ作成
         importData = {}
+        templates = []
+        mediatypes = []
         for method, section in sections.items():
             data = self.STORE.get(method)
             if not data:
@@ -4638,9 +4657,10 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             elif method == 'mediatype':
                 for item in data:
                     mediatype = item['DATA']
-                    if mediatype['type'] == 'EMAIL' and not mediatype.get('username'):
-                        mediatype['username'] = ''
-                        mediatype['password'] = ''
+                    if mediatype['type'] == 'EMAIL':
+                        if mediatype.get('provider') and 'RELAY' not in mediatype['provider']:
+                            mediatype['username'] = mediatype.get('username', 'USERNAME')
+                            mediatype['password'] = mediatype.get('password', 'PASSWORD')
                     if self.VERSION.major >= 6.0:
                         # 6.0対応 content-type入りだと失敗するので削除
                         if mediatype.get('type') == 'SCRIPT':
@@ -4661,12 +4681,19 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     if self.VERSION.major >= 7.0:
                         # 7.0 content_type完全廃止
                         mediatype.pop('content_type', None)
-                importData['media_types'] = [item['DATA'] for item in data]
+                    mediatypes.append(item['DATA'])
+                importData['media_types'] = sorted(mediatypes, key=lambda x:x['name'])
             else:
                 importData[section] = [item['DATA'] for item in data]
 
         importData = [importData]
         triggers = [trigger['DATA'] for trigger in self.STORE.get('trigger', [])] 
+
+        # valuemap要不要の境界バージョン処理
+        if self.VERSION.major >= 5.4 and self.getLatestVersion('MASTER_VERSION') < 5.4:
+            valueMap = importData[0].pop('value_maps', None)
+        else:
+            valueMap = None
 
         # テンプレートの分割処理
         templateGroup = []
@@ -4706,38 +4733,33 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         # さらにそれぞれのグループをZC_TEMPLATE_SEPARATEずつ分離してimportDataに追加
         # 一応0から順にソートする
         count = 0
-        self.importRules['triggers']['createMissing'] = False
+        if self.VERSION.major not in [6.0]:
+            self.importRules['triggers']['createMissing'] = False
         for group in sorted(groups.keys()):
             items = groups[group]
             # インポートエラーが一つでも出ると全部巻き込まれるので、１つずつ入れることにした
             count = 0
             while len(items) > count:
-                if self.VERSION.major in [6.0, 7.0]:
-                    # 6.0/7.0だとこっちで依存関係のは問題なく全部入る
-                    iData = {
-                        'templates': [items[count]],
-                        'triggers': triggers
-                    }
-                    # マスターのバージョンが6.0未満だとvalue_mapsがtemplatesに必要
-                    if self.getLatestVersion('MASTER_VERSION') < 6.0:
-                        iData['value_maps'] = importData[0].get('value_maps')
+                iData= {
+                    'templates': [items[count]],
+                }
+                if self.VERSION.major == 6.0:
+                    iData.update({'triggers': triggers})
+                elif self.VERSION.major == 4.2:
+                    # 4.2だけこれが消えてる
+                    self.importRules['templateLinkage'].pop('deleteMissing', None)
+                else:
+                    pass
+                # マスターのバージョンが6.0未満だとvalue_mapsがtemplatesに必要
+                if self.VERSION.major >= 6.0:
+                    importData[0].pop('value_maps', None)
+                else:
+                    if valueMap:
+                        iData.update({'value_maps': valueMap})
                     else:
                         importData[0].pop('value_maps', None)
-                    importData.append(iData)
-                elif self.VERSION.major == 5.4:
-                    # 5.0はvaluemapが別になっているので5.4はテンプレート側処理時に必要になる
-                    importData.append(
-                        {
-                            'templates': [items[count]],
-                            'value_maps': importData[0]['value_maps']
-                        }
-                    )
-                else:
-                    # trigger prototype内の依存関係以外はこれで入る
-                    if self.VERSION.major == 4.2:
-                        # 4.2だけこれが消えてる
-                        self.importRules['templateLinkage'].pop('deleteMissing', None)
-                    importData.append({'templates': [items[count]]})
+                
+                importData.append(iData)
                 count += 1
 
         # マスターのバージョンが6.2未満でノード側が6.2以上の場合
@@ -4770,11 +4792,9 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         # 表示（仮）
         dispRow = 1
         templateResult = {'success': 0, 'failed': 0, 'messages': []}
-        skip = False
         for importItems in importData:
-            if skip and self.CONFIG.templateSkip:
+            if self.CONFIG.templateSkip and importItems.get('templates'):
                 continue
-            skip = True
             # テンプレート用処理
             if 'templates' in importItems.keys():
                 # 処理するテンプレートの名前
@@ -4977,6 +4997,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         # Yes/Noの値変換
         Y_N = {'NO': 0, 'YES': 1}
         hosts = []
+        if not self.STORE.get('host'):
+            return (True, 'No Exist Hosts in Store Data.')
         for host in self.STORE['host']:
             name = host['NAME']
             data = host['DATA']
@@ -6075,6 +6097,12 @@ def inputParameters():
         action='store_const',
         const='YES',
         help='ホストが別の設定で存在していても設定を上書きする'
+    )
+    processingGroup.add_argument(
+        '--no-uuid',
+        action='store_const',
+        const='YES',
+        help='ZC_UUIDによるホスト識別を利用しない'
     )
     processingGroup.add_argument(
         '--no-delete',
