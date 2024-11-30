@@ -2505,8 +2505,6 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     else:
                         # バージョン文字列が不正なので初期化対象
                         nowVersion = None
-                        # 初期化対象はテンプレートインポートスキップキャンセル
-                        self.CONFIG.templateSkip = False
             if nowVersion:
                 # ワーカーノードの設定削除否定フラグ
                 if not self.CONFIG.noDelete:
@@ -2817,15 +2815,25 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         if not self.sections.get(section):
             return (False, 'No section:%s in sections.' % section)
         methods = self.sections[section]
+
+        # 表示（仮）
+        charMax = max([len(method) for method in methods])
+
         for method in methods:
             function = 'processing' + method[0].upper() + method[1:]
             rWord = 'NoProcessing'
             if function in self.__dir__():
                 result = getattr(self, function)()
-                rWord = 'Success' if result[0] else 'Failed'
+                if result == ZC_COMPLETE:
+                    rWord = 'Success'
+                elif result[0]:
+                    rWord = result[1]
+                else:
+                    rWord = 'Failed'
 
             # 表示（仮）
-            display.append(f'{TAB*3}{method}: {rWord}.')
+            space = ' ' * (charMax - len(method))
+            display.append(f'{TAB*3}{method}{space}: {rWord}.')
 
             if not result[0]:
                 break
@@ -4700,6 +4708,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         group = 0
         groups = {}
         processed = []
+        templateCount = len(templates)
         while templates:
             groups[group] = []
             # グループ０：リンクするテンプレートのない
@@ -4733,16 +4742,24 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         # さらにそれぞれのグループをZC_TEMPLATE_SEPARATEずつ分離してimportDataに追加
         # 一応0から順にソートする
         count = 0
-        if self.VERSION.major not in [6.0]:
-            self.importRules['triggers']['createMissing'] = False
+        #if self.VERSION.major not in [6.0, 7.0]:
+        #   self.importRules['triggers']['createMissing'] = False
         for group in sorted(groups.keys()):
             items = groups[group]
             # インポートエラーが一つでも出ると全部巻き込まれるので、１つずつ入れることにした
             count = 0
             while len(items) > count:
+                template = items[count]
+                if self.getLatestVersion('MASTER_VERSION') >= 5.4:
+                    name = '/%s/' % template['name']
+                else:
+                    name = '{%s:' % template['name']
                 iData= {
-                    'templates': [items[count]],
+                    'templates': [template],
                 }
+                templateTriggers = [trigger for trigger in triggers if name in trigger['expression']]
+                if templateTriggers:
+                    iData.update({'triggers': templateTriggers})
                 if self.VERSION.major == 6.0:
                     iData.update({'triggers': triggers})
                 elif self.VERSION.major == 4.2:
@@ -4785,7 +4802,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         # インポートデータ処理
         # テンプレートとホスト以外を全部処理、次にテンプレートをZC_TEMPLATE_SEPARATEずつ処理、ホストは次のファンクション
         # 表示（仮）
-        print(f'\n{TAB*2}Template Import:\n{TAB*3}', end='', flush=True)
+        print(f'\n{TAB*2}Template Import [{templateCount}]:\n{TAB*3}', end='', flush=True)
         if self.CONFIG.templateSkip:
             print('SKIP.')
             
@@ -4891,16 +4908,13 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         # セクション内に何もないか、そもそもセクションがない
         if not self.sections.get(section):
             return (True, f'{section} is Empty.')
-        sections = self.sections[section]
 
-        # 表示（仮）
-        print(f'\n{TAB*2}Method Data Convert in {section} section:', flush=True)
-        
-        # EXTENDで削除する場合、適用の逆順でないといけない場合があるのでリバース
-        # 適用: プロキシグループ -> プロキシ（プロキシグループのExtendが先にリストに入る）
-        # 削除: プロキシ -> プロキシグループ（逆順にすることでプロキシが先に削除される）
+        sections = self.sections[section]
         if section == 'EXTEND':
-            sections = reversed(sections)
+            # EXTENDで削除する場合、適用の逆順でないといけない場合があるのでリバース
+            # 適用: プロキシグループ -> プロキシ（プロキシグループのExtendが先にリストに入る）
+            # 削除: プロキシ -> プロキシグループ（逆順にすることでプロキシが先に削除される）
+            sections = list(reversed(sections))
 
         # データの変換処理
         result = self.processingMethodData(section)
@@ -4908,13 +4922,15 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             return result
 
         # 表示（仮）
+        print(f'\n{TAB*2}Method Data Convert in {section} section:', flush=True)
         for row in result[1]:
             print(row)
+        charMax = max([len(item) for item in sections])
+        itemMax = [len(self.STORE.get(item, [])) for item in sections]
+        itemMax = len(str(max(itemMax))) if itemMax else 0
+        print(f'\n{TAB*2}Execute API in {section} section:', end='', flush=True)
 
         # セクションの適用
-        # 表示（仮）
-        print(f'\n{TAB*2}Execute API in {section} section:',end='', flush=True)
-
         for method in sections:
             items = []
             api = getattr(self.ZAPI, method.replace('Extend', ''))
@@ -4944,7 +4960,10 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             items.append({'create': data})
             
             # 表示（仮）
-            print(f'\n{TAB*3}{method}: ',end='', flush=True)
+            spaceC = ' ' * (charMax - len(method))
+            itemLen = len(items)
+            spaceL = ' ' * (itemMax - itemLen) if itemLen else ''
+            print(f'\n{TAB*3}{method}{spaceC}[{spaceL}{itemLen}]: ',end='', flush=True)
 
             # 実行
             for item in items:
@@ -4978,6 +4997,11 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
 
                 if not result[0]:
                     return result
+            if items:
+                sleep(1)
+            else:
+                # 表示（仮）
+                print('No Items', end='', flush=True)
 
         # API実行が終わったらローカルを更新
         self.getDataFromZabbix()
@@ -5080,9 +5104,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 else:
                     proxyType = 'proxy'
                 monitor = ZABBIX_PROXY_MODE.get(proxyType, 0)
-                if monitor > 0:
-                    # proxyの種類と対象を決定
-                    proxy = data.pop(proxyType, None)
+                proxy = data.pop(proxyType, None)
+                if monitor > 0 and proxy:
                     # プロキシ情報を追加
                     data.update(
                         {
@@ -5228,7 +5251,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         # ZabbixのAPI応答ベースの処理なのでProcess*じゃなくてThread*を使ってる
 
         # 表示（仮）
-        print(f'\n{TAB*2}Host Import:\n{TAB*3}', end='', flush=True)
+        print(f'\n{TAB*2}Host Import [{len(hosts)}]:\n{TAB*3}', end='', flush=True)
 
         future_list = []
         with futures.ThreadPoolExecutor(max_workers=self.CONFIG.phpWorkerNum) as executor:
