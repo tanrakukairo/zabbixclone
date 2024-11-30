@@ -7,9 +7,9 @@ Copyright (c) 2024 tsuno teppei
 Released under the MIT license
 https://opensource.org/licenses/mit-license.php
 '''
-__author__ = 'tsuno.teppei'
-__version__ = '0.1.8'
-__date__ = '2024/11/27'
+__author__  = 'tsuno.teppei'
+__version__ = '0.1.9'
+__date__    = '2024/12/15'
 
 import os
 import sys
