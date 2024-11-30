@@ -2171,7 +2171,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         '''
 
         # ZabbixAPIインスタンス
-        API = ZabbixAPI(self.CONFIG.endpoint)
+        API = ZabbixAPI(url=self.CONFIG.endpoint, skip_version_check=True)
 
         # 接続先の名称確認
         # APIで取れるようになったらそっちを使う
@@ -4742,14 +4742,15 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         # さらにそれぞれのグループをZC_TEMPLATE_SEPARATEずつ分離してimportDataに追加
         # 一応0から順にソートする
         count = 0
-        #if self.VERSION.major not in [6.0, 7.0]:
-        #   self.importRules['triggers']['createMissing'] = False
         for group in sorted(groups.keys()):
             items = groups[group]
             # インポートエラーが一つでも出ると全部巻き込まれるので、１つずつ入れることにした
             count = 0
             while len(items) > count:
                 template = items[count]
+                if self.VERSION.major == 4.2:
+                    # 4.2だけこれが消えてる
+                    self.importRules['templateLinkage'].pop('deleteMissing', None)
                 if self.getLatestVersion('MASTER_VERSION') >= 5.4:
                     name = '/%s/' % template['name']
                 else:
@@ -4757,17 +4758,14 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 iData= {
                     'templates': [template],
                 }
+                # 対象のテンプレート用のTriggersを追加する
                 templateTriggers = [trigger for trigger in triggers if name in trigger['expression']]
                 if templateTriggers:
                     iData.update({'triggers': templateTriggers})
-                if self.VERSION.major == 6.0:
-                    iData.update({'triggers': triggers})
-                elif self.VERSION.major == 4.2:
-                    # 4.2だけこれが消えてる
-                    self.importRules['templateLinkage'].pop('deleteMissing', None)
-                else:
-                    pass
-                # マスターのバージョンが6.0未満だとvalue_mapsがtemplatesに必要
+                # 4.xはホストプロトタイプのディレクトリ指定がテンプレート内にないとダメっぽいので雑に全部追加
+                if self.getLatestVersion('MASTER_VERSION') < 5.0:
+                    iData.update({'groups': importData[0]['groups']})
+                # バージョンが6.0未満だとvalue_mapsがtemplatesに必要
                 if self.VERSION.major >= 6.0:
                     importData[0].pop('value_maps', None)
                 else:
@@ -4775,10 +4773,10 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         iData.update({'value_maps': valueMap})
                     else:
                         importData[0].pop('value_maps', None)
-                
                 importData.append(iData)
                 count += 1
 
+        # ホストグループとテンプレートグループの分離処理
         # マスターのバージョンが6.2未満でノード側が6.2以上の場合
         if self.getLatestVersion('MASTER_VERSION') < 6.2 and self.VERSION.major >= 6.2:
             templateGroup = [item['name'] for item in templateGroup]

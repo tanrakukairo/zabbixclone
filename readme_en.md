@@ -92,13 +92,13 @@ Checking operation within Windows11pro and alpine:latest container.
 
 ## Requirement
 
-* Zabbix 4.0 Later
-* Python 3.x Later
+* Zabbix 4.0+
+* Python 3.x+ (tested 3.11, Maybe 3.x+ can run it.)
 
 excluding development versions.
 
 Required Python Library:
-* pyzabbix
+* zabbix-utils
 
 Requied use Redis/DynamoDB.
 * redis
@@ -812,11 +812,7 @@ Only MySQL and PostgreSQL are supported. Port numbers cannot be specified.
 I'll test (X+1).0 LTS and X.2/X.4 Point-release from X.0 LTS.<br>
 Other than that, there are many patterns, so if anyone tries it, please let me know the results.
 
-It is currently unknown if changes to trigger expressions (Zabbix5.4 or later) can be converted in configuration.import().
-
-* 6.0 -> 6.2/6.4, Trigger prototype's dependencies cannot import.
-* 6.0 -> later, Some 6.0's templates, Template configured hostgroup for hostprototype cannot be registered because that hostgroup is changed templategroup.
-* 4.2 -> later, "Template VM VMware", Template configured hostgroup for hostprototype cannot be registered because it unrecognized target hostgroup. (Target hostgroup "Hypervisors" exists.)
+* 6.0- -> 6.2+, Template configured hostgroup be changed templategroup for hostprototype cannot be registered.
 
 "-" is skiped tests because it's same codes as 7.0 -> 7.0 tests.
 
@@ -824,8 +820,8 @@ It is currently unknown if changes to trigger expressions (Zabbix5.4 or later) c
 |:-:|:-:|:-:|:-:|:-:|:-:|:-:|
 |7.0|7.0|OK|OK|OK|OK|OK|
 |6.0|7.0|*1|OK|-|-|-|
-|6.0|6.4|N/A|OK?|-|-|-|
-|6.0|6.2|N/A|OK?|-|-|-|
+|6.0|6.4|N/A|OK|-|-|-|
+|6.0|6.2|N/A|OK|-|-|-|
 |6.0|6.0|N/A|OK|-|-|-|
 |5.0|6.0|N/A|OK|-|-|-|
 |5.0|5.4|N/A|OK|-|-|-|
