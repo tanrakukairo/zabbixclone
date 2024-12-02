@@ -197,6 +197,8 @@ class ZabbixCloneConfig():
             CONFIG.update({param: value})
 
         # クラス変数化
+        self.yes = CONFIG.get('yes', False)
+        self.quiet = CONFIG.get('quiet', False)
         # ノード名
         self.node = CONFIG.get('node', ZC_DEFAULT_NODE)
         # ストア種別
@@ -304,7 +306,11 @@ class ZabbixCloneConfig():
         # 監視対象のエンドポイントIP利用の強制
         self.forceUseip = True if CONFIG.get('force_useip', 'NO') == 'YES' else False
         # 監視対象のアップデート許可
+        self.hostUpdate = True if CONFIG.get('host_update', 'NO') == 'YES' else False
+        # 監視対象のアップデート強制
         self.forceHostUpdate = True if CONFIG.get('force_host_update', 'NO') == 'YES' else False
+        if self.forceHostUpdate:
+            self.hostUpdate = True
         # ストアデータにない対象の削除を行わない
         self.noDelete = True if CONFIG.get('no_delete', 'YES') == 'YES' else False
         # checknow実行
@@ -402,10 +408,13 @@ class ZabbixCloneConfig():
         # 動作設定関連
         if self.forceInitialize:
             print(f'{TAB}Force Initialize with Worker: YES')
-        if self.forceHostUpdate:
-            print(f'{TAB}Force Update Exist Hosts: YES')
         if self.forceUseip:
             print(f'{TAB}Force Use IP Address Monitoring: YES')
+        if self.hostUpdate:
+            if self.forceHostUpdate:
+                print(f'{TAB}Force Update Exist Hosts: YES')
+            else:
+                print(f'{TAB}Update Exist Hosts: YES')
         if self.noDelete:
             print(f'{TAB}Don\'t Delete Worker-Node Items: YES')
         if self.checknowExec:
@@ -2464,6 +2473,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             # ワーカーノード側処理
             if self.getLatestVersion('MASTER_VERSION') == 4.0:
                 # マスターバージョンが4.0の場合、ZC_UUIDが存在しないのでホスト強制アップデートモードにする
+                self.CONFIG.hostUpdate == True
                 self.CONFIG.forceHostUpdate == True
 
             # 適用バージョンの確認
@@ -5146,7 +5156,6 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     tags[0]: item['ZABBIX_ID']
                 }
             )
-
         # create/update/delete判定と処理
         '''
         host.create/update実体
@@ -5165,70 +5174,58 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             data = item['data']
             hostUuid = item['uuid']
             hostId = None
+            update = False
             if localHost:
-                # 同じ名前のホストが既にある
-                if hostUuid in hostUuids.keys():
-                    # ZC_UUIDも同じならば更新
-                    function = 'update'
-                    # 更新対象のIDを入れる
-                    hostId = localHost['ZABBIX_ID']
-                    update = True
-                else:
-                    # UUIDが違うので別ホストの名前変更で衝突
-                    if self.CONFIG.forceHostUpdate:
-                        # 強制アップデートの場合はストアの情報でupdate実行
+                # 同じホスト名がある
+                if self.CONFIG.hostUpdate:
+                    # アップデートする場合
+                    if hostUuid in hostUuids.keys():
+                        # ZC_UUIDも同じ
                         function = 'update'
-                        # ローカルにあるホストのIDを使う
+                        # 更新対象のローカルのIDを入れる
                         hostId = localHost['ZABBIX_ID']
                         update = True
-                    else:
-                        # 強制しない場合はインポート対象から削除
-                        hosts.remove(item)
-                        continue
-                if update:
-                    # インターフェイスの更新は別でやらないといけない
-                    hostIfs = data.pop('interfaces', None)
-                    if hostIfs:
-                        updateInterfaces.append(
-                            {
-                                'host': item['name'],
-                                'id': localHost['ZABBIX_ID'],
-                                'data': hostIfs
-                            }
-                        )
+                else:
+                    # アップデートしない場合
+                    hosts.remove(item)
+                    continue
             else:
                 # 同じホスト名はない
-                if hostUuid in hostUuids:
-                    # ローカルで別のホスト名に変えていた
+                if hostUuid in hostUuids.keys():
+                    # ZC_UUIDは同じ
                     if self.CONFIG.forceHostUpdate:
-                        # 強制アップデートの場合はローカルの名前でupdate実行
+                        # 強制アップデートの場合
                         function = 'update'
                         # ストアの情報から名前を抜く
-                        data.pop('host', '__NO_HOST.HOST__')
-                        data.pop('name', '__NO_HOST.NAME__')
+                        data.pop('host', None)
+                        data.pop('name', None)
                         # ローカルにあるホストのIDを使う
-                        hostId = hostUuids[item['uuid']]
+                        hostId = hostUuids[hostUuid]
+                        update = True
                     else:
-                        # 強制しない場合はインポート対象から削除
+                        # アップデートしない場合
                         hosts.remove(item)
                         continue
                 else:
-                    # 完全に同じホストはいないのでそのままcreate
+                    # 新規ホスト
                     function = 'create'
+            if update:
+                # インターフェイスの更新は別でやらないといけない
+                hostIfs = data.pop('interfaces', None)
+                if hostIfs:
+                    updateInterfaces.append(
+                        {
+                            'host': item['name'],
+                            'id': hostId,
+                            'data': hostIfs
+                        }
+                    )
             item['function'] = function
             data[idName] = hostId
 
-        # 監視する対象がないので終了
-        if not hosts:
-            if self.CONFIG.forceHostUpdate:
-                return (True, 'No Exist Monitoring Hosts with %s.' % self.CONFIG.node)
-            else:
-                return (True, 'Not Allowed Host Update, All Excluded.')
-
-
-        # 並列処理の結果
+        # ホストの処理
         result = []
-        # 並列処理中のホスト作成ファンクション
+        # 並列処理用のホスト作成ファンクション
         def importHost(host):
             function = host['function']
             name = host['name']
@@ -5245,25 +5242,31 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             print(f'{res}', end='', flush=True)
             return result
 
-        # host.createの並列実行、実行数はphp-fpmのフォーク数以下にする
-        # ZabbixのAPI応答ベースの処理なのでProcess*じゃなくてThread*を使ってる
-
         # 表示（仮）
+        dispCount = T_COUNT*3
         print(f'\n{TAB*2}Host Import [{len(hosts)}]:\n{TAB*3}', end='', flush=True)
 
+        # host.createの並列実行、実行数はphp-fpmのフォーク数以下にする
+        # ZabbixのAPI応答ベースの処理なのでProcess*じゃなくてThread*を使ってる
         future_list = []
         with futures.ThreadPoolExecutor(max_workers=self.CONFIG.phpWorkerNum) as executor:
             for host in hosts:
                 future = executor.submit(importHost, host)
                 future_list.append(future)
+
+                # 表示（仮）
+                dispCount += 1
+                if dispCount == WIDE_COUNT:
+                    print(f'\n{TAB*3}', end='', flush=True)
+
         futures.as_completed(fs=future_list)
 
+        # 表示（仮）
         result = [item._result for item in future_list]
         create = len([item for item in result if item[0] and item[1] == 'create'])
         update = len([item for item in result if item[0] and item[1] == 'update'])
         failed = [item for item in result if not item[0]]
 
-        # 表示（仮）
         print(f'\n{TAB*3}Create: {create} / Update: {update}', end='', flush=True)
 
         if failed:
@@ -5363,7 +5366,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                                 break
                     if not change:
                         # 表示（仮）
-                        print('.', end='')
+                        print('_', end='', flush=True)
                         dispCount += 1
                         # 変更がないのでスキップ
                         continue
@@ -5371,10 +5374,10 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     try:
                         result = self.ZAPI.hostinterface.update(**updateIf)
                         # 表示（仮）
-                        print('U', end='')
+                        print('U', end='', flush=True)
                     except Exception as e:
                         # 表示（仮）
-                        print('X', end='')
+                        print('X', end='', flush=True)
                         disp += f'{e}'
 
                     # 表示（仮）
@@ -5391,6 +5394,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             'id': hostIf['interfaceid']
                         }
                     )
+
             # 表示（仮）
             print('')
         else:
@@ -5421,33 +5425,40 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         self.getDataFromZabbix()            
 
         # ホスト削除
-        # ストアデータに存在しないホストは削除する
-        # 対象IDリスト
-        deleteTarget = []
-        result = []
-        # update/createの両方処理済みのホスト、ここにないものを削除する
-        importHosts = [host['name'] for host in hosts]
-        for name, item in self.LOCAL['host'].items():
-            if name not in importHosts:
-                deleteTarget.append(item['ZABBIX_ID'])
-        if deleteTarget and not self.CONFIG.noDelete:
-            try:
-                self.ZAPI.host.delete(*deleteTarget)
-                # ID->名前変換
-                deleteTarget = '/'.join([self.replaceIdName('host', host) for host in deleteTarget])
-                result = True
-            except Exception as e:
-                result = e
-            # Zabbixからのデータ再取得
-            self.getDataFromZabbix()
+        if not self.CONFIG.noDelete:
+            # ストアデータに存在しないホストは削除する
+            # 対象IDリスト
+            deleteTarget = []
+            result = []
+            # update/createの両方処理済みのホスト、ここにないものを削除する
+            importHosts = [host['name'] for host in hosts]
+            for name, item in self.LOCAL['host'].items():
+                if name not in importHosts:
+                    deleteTarget.append(item['ZABBIX_ID'])
+            if deleteTarget:
+                try:
+                    self.ZAPI.host.delete(*deleteTarget)
+                    # ID->名前変換
+                    deleteTarget = '/'.join([self.replaceIdName('host', host) for host in deleteTarget])
+                    result = True
+                except Exception as e:
+                    result = e
+                # Zabbixからのデータ再取得
+                self.getDataFromZabbix()
 
-            # 表示（仮）
-            print(f'{TAB*2}Delete Hosts: {deleteTarget}', flush=True)
+                # 表示（仮）
+                print(f'{TAB*2}Delete Hosts: {deleteTarget}', flush=True)
+                if result is True:
+                    print('Success.')
+                else:
+                    print(f'Failed, {e}')
 
-            if result is True:
-                print('Success.')
+        # 監視する対象がないので終了
+        if not hosts:
+            if self.CONFIG.hostUpdate:
+                return (True, 'No Exist Monitoring Hosts with %s.' % self.CONFIG.node)
             else:
-                print(f'Failed, {e}')
+                return (True, 'Not Allowed Host Update, All Excluded.')
 
         # ホストインポート処理のログ出しまたは画面出力（予）
 
@@ -6027,11 +6038,16 @@ def inputParameters():
         '-v', '--version',
         help='version指定'
     )
-    '''parser.add_argument(
+    parser.add_argument(
         '-q', '--quiet',
         action='store_true',
         help='処理進捗を表示しない'
-    )'''
+    )
+    parser.add_argument(
+        '-y', '--yes',
+        action='store_true',
+        help='キー入力はYESで省略する'
+    )
     parser.add_argument(
         '--method',
         nargs='+',
@@ -6114,10 +6130,16 @@ def inputParameters():
         help='ホストのエンドポイントをIP利用に強制する'
     )
     processingGroup.add_argument(
+        '--host-update',
+        action='store_const',
+        const='YES',
+        help='ホスト設定のアップデートを実行する'
+    )
+    processingGroup.add_argument(
         '--force-host-update',
         action='store_const',
         const='YES',
-        help='ホストが別の設定で存在していても設定を上書きする'
+        help='ホストが別の設定で存在していた場合でも設定を上書きする'
     )
     processingGroup.add_argument(
         '--no-uuid',
@@ -6248,7 +6270,7 @@ def main():
     if command != 'clone':
         quiet = True
     else:
-        quiet = params.pop('quiet', False)
+        quiet = params.get('quiet', False)
     # clone以外の動作: ターゲットのものだけ表示する
     targetMethod = params.pop('method', None)
     targetName = params.pop('name', None)
@@ -6264,9 +6286,18 @@ def main():
             master = ZabbixClone(masterConfig)
 
         # 表示（仮）
-        if not quiet:
+        if not config.quiet:
             config.showParameters()
-            print(f'\n[START] {ZABBIX_TIME()}')
+        if not config.yes:
+            if not config.quiet:
+                inputKey = input('\nContinue? [y/N]: ')
+                if inputKey in ['y', 'Y', 'yes', 'YES']:
+                    pass
+                else:
+                    sys.exit('[ABORT]')
+            else:
+                sys.exit('[DO NOT START]')
+        print(f'\n[START] {ZABBIX_TIME()}')
 
         # 実行処理リスト
         functions = [
