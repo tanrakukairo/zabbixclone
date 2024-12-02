@@ -5028,9 +5028,9 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             monitorNode = [tag.get('value') for tag in data.get('tags', []) if tag.get('tag') == ZC_MONITOR_TAG]
             hostUuid = [tag.get('value') for tag in data.get('tags', []) if tag.get('tag') == ZC_UNIQUE_TAG]
             hostUuid = hostUuid[0] if len(hostUuid) == 1 else None
-            if self.checkMasterNode() or self.checkReplicaNode():
-                # masterとreplicaはそのまま適用
-                pass
+            if self.checkReplicaNode():
+                # replicaはそのまま適用
+                data.update({'status': 1 if data.get('status') == 'DISABLED' else 0})
             elif self.CONFIG.node in monitorNode:
                 # 監視有効で適用するホスト
                 data.update({'status': ZABBIX_ENABLE})
