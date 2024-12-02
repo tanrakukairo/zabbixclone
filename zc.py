@@ -4762,8 +4762,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 templateTriggers = [trigger for trigger in triggers if name in trigger['expression']]
                 if templateTriggers:
                     iData.update({'triggers': templateTriggers})
-                # 4.xはホストプロトタイプのディレクトリ指定がテンプレート内にないとダメっぽいので雑に全部追加
-                if self.getLatestVersion('MASTER_VERSION') < 5.0:
+                # ホストプロトタイプのディレクトリ指定がテンプレート内にないとダメっぽいので雑に全部追加
+                if self.getLatestVersion('MASTER_VERSION') < 6.0:
                     iData.update({'groups': importData[0]['groups']})
                 # バージョンが6.0未満だとvalue_mapsがtemplatesに必要
                 if self.VERSION.major >= 6.0:
@@ -5047,17 +5047,17 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             if data.get('inventory'):
                 data['inventory'].pop('inventory_mode', None)
             # インターフェイスの処理
-            if len(data['interfaces']) == 1:
-                # インターフェイスが一つしかない場合はそれがメインインターフェイス
-                data['interfaces'][0]['default'] = 'YES'
+            if len(data['interfaces']) == 0:
+                # インターフェイスがデフォルト値だけなのでconfigurationで出力されない
+                data['interfaces'] = [{'default': 'YES'}]
             for hostIf in data['interfaces']:
                 # create時に不要なので削除
-                hostIf.pop('interface_ref', '')
+                hostIf.pop('interface_ref', None)
                 ifType = hostIf.get('type', 'AGENT')
                 hostIf.update(
                     {
                         'ip': hostIf.get('ip', '127.0.0.1'),
-                        'main': Y_N[hostIf.pop('default', 'NO')],
+                        'main': Y_N[hostIf.pop('default', 'YES')],
                         'port': hostIf.get('port', '10050'),
                         'type': ZABBIX_IFTYPE[ifType] if not ifType.isdigit() else ifType,
                         'useip': 0 if hostIf.get('useip', 'YES') == 'NO' else 1,
