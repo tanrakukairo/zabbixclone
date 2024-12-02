@@ -5030,7 +5030,11 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             hostUuid = hostUuid[0] if len(hostUuid) == 1 else None
             if self.checkReplicaNode():
                 # replicaはそのまま適用
+<<<<<<< HEAD
                 data.update({'status': 1 if data.get('status') == 'DISABLED' else 0})
+=======
+                data.update({'status': 1 if data.get('status') == 'DISABLE' else 0})
+>>>>>>> 50ba1f69f0ffaae4d1bbd88c8e7a39e4a3d6c387
             elif self.CONFIG.node in monitorNode:
                 # 監視有効で適用するホスト
                 data.update({'status': ZABBIX_ENABLE})
