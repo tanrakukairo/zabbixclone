@@ -293,12 +293,12 @@ class ZabbixCloneConfig():
             # 適用指定バージョン
             self.targetVersion = CONFIG.get('version', None)
             # ワーカーがデフォルトパスワードであれば管理者のパスワードを設定ファイル内のものに変更する
-            self.updatePassword = True if CONFIG.get('update_password', 'NO') == 'YES' else False
+            self.updatePassword = CONFIG.get('update_password', 'NO')
         else:
             # マスターでバージョン指定は不要
             self.targetVersion = None
             # マスターノードのパスワードは操作しない
-            self.updatePassword =False
+            self.updatePassword = 'NO'
         # ワーカーノードの強制初期化
         self.forceInitialize = True if CONFIG.get('force_initialize', 'NO') == 'YES' else False
         if self.role == 'master':
@@ -369,7 +369,7 @@ class ZabbixCloneConfig():
         self.endpoint = self.storeConnect.get('directEndpoint')
         self.token = self.storeConnect.get('directToken')
         self.auth = {}
-        self.updatePassword = False
+        self.updatePassword = 'NO'
         self.templateSkip = False
         return ZC_COMPLETE
 
@@ -400,7 +400,7 @@ class ZabbixCloneConfig():
             user = self.auth['user']
             print(f'{TAB}Authentication Method: PASSWORD')
             print(f'{TAB*2}User: {user}')
-        if self.updatePassword:
+        if self.updatePassword == 'YES':
             print(f'{TAB}Update Password: YES')
         if self.selfCert:
             print(f'{TAB}Self Certification Use: YES')
@@ -2205,7 +2205,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         if token:
             try:
                 API.login(token=token)
-                if not self.CONFIG.updatePassword:
+                if self.CONFIG.updatePassword == 'NO':
                     # トークンで認証したのでパスワード認証しない
                     auth = None
                 else:
@@ -2220,20 +2220,21 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             try:
                 API.login(**auth)
                 # 変更後のパスワードで認証できたので更新しない
-                self.CONFIG.updatePassword = False
+                if self.CONFIG.updatePassword == 'YES':
+                    self.CONFIG.updatePassword = 'UPDATE'
                 if token == '':
                     # 一度はトークン認証通しているのでそちらで認証しなおし（トークン優先）
                     token = self.CONFIG.token
                     API.login(token=token)
             except Exception as e:
-                if self.CONFIG.updatePassword:
+                if self.CONFIG.updatePassword == 'YES':
                     pass
                 else:
                     # 最終的に認証に失敗
                     return (False, 'Incorrect Credentials.')
 
         # パスワード更新の場合はトークン認証してない場合デフォルト認証を試行する
-        if self.CONFIG.updatePassword and not token:
+        if self.CONFIG.updatePassword == 'YES' and not token:
             if self.CONFIG.platformPassword:
                 # ZabbixCloud対応: プラットフォームがAdminのデフォルトパスワード生成
                 auth = {'user':ZABBIX_DEFAULT_AUTH['user'], 'password': self.CONFIG.platformPassword}
@@ -2316,8 +2317,12 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         auth: [user, changePasswd, currentPasswd]
         パスワード変更は失敗しても処理を止めさせないのでTrueを返す（ここに来るのに認証は通っている）
         '''
-        if not self.CONFIG.updatePassword:
+        if self.CONFIG.updatePassword == 'NO':
+            return (True, 'No Change Password.')
+        elif self.CONFIG.updatePassword == 'UPDATE':
             return (True, 'Already Update.')
+        else:
+            pass
         result = ZC_COMPLETE
         idName = self.getKeynameInMethod('user', 'id')
         name = self.getKeynameInMethod('user', 'name')
@@ -2399,10 +2404,15 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         if not result[0]:
             return result
 
+        # 表示（仮）
+        print(f'\n{TAB*2}Get Node Zabbix Data:', end='', flush=True)
+
         # データの初回取得
         result = self.getDataFromZabbix()
         if not result[0]:
+            print(f'\n{TAB*3}Failed.', end='', flush=True)
             return result
+        print(f'\n{TAB*3}Success.', end='', flush=True)
 
         # アラート通知ユーザー確認
         # デフォルト通知ユーザーがいるか確認
@@ -2495,7 +2505,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             info = self.getLatestVersion('DESCRIPTION')
             if info:
                 info = info.replace(', ', f'\n{TAB*3}')
-            print(f'\n{TAB*2}Cloning Version: {version}', flush=True)
+            print(f'\n{TAB*2}Cloning Version:\n{TAB*3}{version}', flush=True)
             if self.CONFIG.targetVersion is False:
                 print(f'{TAB*3}Change Latest, No Exist:{lostVersion}.', flush=True)
             if info:
@@ -2508,14 +2518,18 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 try:
                     # バージョン文字列がUUIDか確認
                     uuid.UUID(nowVersion)
+                    initialize = False
                 except:
                     if re.match('__DIRECT_MASTER_[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z__', nowVersion):
                         # マスター直接適用なのでパス
-                        pass
+                        initialize = False
                     else:
                         # バージョン文字列が不正なので初期化対象
-                        nowVersion = None
-            if nowVersion:
+                        initialize = True
+            else:
+                initialize = True
+
+            if not initialize:
                 # ワーカーノードの設定削除否定フラグ
                 if not self.CONFIG.noDelete:
 
@@ -2530,6 +2544,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         if ids:
                             try:
                                 getattr(api, function)(*ids)
+                                result = ZC_COMPLETE
                             except Exception as e:
                                 # 実行失敗で処理中止
                                 result = (False, 'Failed, firstProcess Delete %s, %s.' % (method, e))
@@ -2538,7 +2553,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         res = 'Success' if result[0] else 'Failed'
                         print(f'{TAB*3}{method}: {res}.')
 
-                        if not result[1]:
+                        if not result[0]:
                             break
 
             else:
@@ -2604,6 +2619,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     if ids != []:
                         try:
                             getattr(api, function)(*ids)
+                            result = ZC_COMPLETE
                         except Exception as e:
                             # 実行失敗で処理中止
                             result = (False, 'Failed, firstProcess Default Delete %s, %s.' % (method, e))
@@ -2612,19 +2628,21 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     res = 'Success' if result[0] else 'Failed'
                     print(f'{TAB*4}{method}: {res}.')
 
-                    if not result[1]:
+                    if not result[0]:
                         break
 
-                if result[1]:
+                if result[0]:
                     # バージョン情報の挿入
-                    self.setVersionCode(init=True)
+                    result = self.setVersionCode(init=initialize)
                     # 表示（仮）
-                    print(f'{TAB*2}Set VersionCode Globalmacro.')
+                    print(f'{TAB*2}Set VersionCode Globalmacro:', end='', flush=True)
+                    if result[0]:
+                        print(f'\n{TAB*3}Success.', end='', flush=True)
+                    else:
+                        print(f'\n{TAB*3}Failed.', end='', flush=True)
 
-        if result[1]:
-            self.getDataFromZabbix()
-            # 表示（仮）
-            print(f'{TAB*2}Get Node Zabbix Data.', end='', flush=True)
+        if result[0]:
+            result = self.getDataFromZabbix()
         
         return result
 
@@ -4810,9 +4828,9 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         # インポートデータ処理
         # テンプレートとホスト以外を全部処理、次にテンプレートをZC_TEMPLATE_SEPARATEずつ処理、ホストは次のファンクション
         # 表示（仮）
-        print(f'\n{TAB*2}Template Import [{templateCount}]:\n{TAB*3}', end='', flush=True)
+        print(f'\n{TAB*2}Template Import[{templateCount}]:\n{TAB*3}', end='', flush=True)
         if self.CONFIG.templateSkip:
-            print('SKIP.')
+            print('SKIP', end='', flush=True)
             
         # 表示（仮）
         dispRow = 1
@@ -5225,11 +5243,13 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
 
         # ホストの処理
         result = []
+
         # 並列処理用のホスト作成ファンクション
         def importHost(host):
             function = host['function']
             name = host['name']
             data = host['data']
+            dispCount = host['dispCount']
             res = 'C' if function == 'create' else 'U'
             try:
                 getattr(self.ZAPI.host, function)(**data)
@@ -5240,27 +5260,26 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 res = 'X'
             # 表示（仮）
             print(f'{res}', end='', flush=True)
+            if dispCount == WIDE_COUNT:
+                print(f'\n{TAB*3}', end='', flush=True)
             return result
 
         # 表示（仮）
         dispCount = T_COUNT*3
-        print(f'\n{TAB*2}Host Import [{len(hosts)}]:\n{TAB*3}', end='', flush=True)
+        print(f'\n{TAB*2}Host Import[{len(hosts)}]:\n{TAB*3}', end='', flush=True)
 
         # host.createの並列実行、実行数はphp-fpmのフォーク数以下にする
         # ZabbixのAPI応答ベースの処理なのでProcess*じゃなくてThread*を使ってる
         future_list = []
         with futures.ThreadPoolExecutor(max_workers=self.CONFIG.phpWorkerNum) as executor:
             for host in hosts:
+                host['dispCount'] = dispCount
+                dispCount += 1
                 future = executor.submit(importHost, host)
                 future_list.append(future)
-
-                # 表示（仮）
-                dispCount += 1
                 if dispCount == WIDE_COUNT:
-                    print(f'\n{TAB*3}', end='', flush=True)
-
+                    dispCount = T_COUNT*3
         futures.as_completed(fs=future_list)
-
         # 表示（仮）
         result = [item._result for item in future_list]
         create = len([item for item in result if item[0] and item[1] == 'create'])
@@ -5279,10 +5298,10 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
 
         # インターフェイスのアップデート
         deleteInterfaces = []
-        # 表示（仮）
         display = []
         if updateInterfaces:
 
+            # 表示（仮）
             dispCount = T_COUNT*3
             print(f'\n{TAB*2}Update Interface(s):\n{TAB*3}',end='', flush=True)
 
@@ -5385,6 +5404,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     dispCount += 1
                     if dispCount == WIDE_COUNT:
                         print(f'\n{TAB*3}', end='', flush=True)
+                        dispCount = T_COUNT*3
 
                 for hostIf in hostIfs:
                     # 削除対象の処理
@@ -5477,7 +5497,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         # ローカルにバージョンのグローバルがあるか確認
         idName = self.getKeynameInMethod('usermacro', 'id')
         versionCode = self.LOCAL['usermacro'].get(ZC_VERSION_CODE)
-        if versionCode:
+        if versionCode and not init:
             # あったら更新
             function = 'updateglobal'
             data = {
@@ -5500,10 +5520,11 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
 
         try:
             getattr(self.ZAPI.usermacro, function)(**data)
+            result = ZC_COMPLETE
         except Exception as e:
-            return (False, 'Failed, %s Version:%s. %s' % (function, version, e))
+            result = (False, 'Failed, %s Version:%s. %s' % (function, version, e))
 
-        return ZC_COMPLETE
+        return result
 
     def createNewData(self):
 
