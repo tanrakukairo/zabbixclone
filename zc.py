@@ -15,7 +15,6 @@ import os
 import sys
 import json
 import uuid
-import requests
 from zabbix_utils import ZabbixAPI
 import re
 import bz2
@@ -28,6 +27,10 @@ import inspect
 import argparse
 import shutil
 import textwrap
+
+import logging
+DEFAULT_LOG_LEVEL = 'DEBUG'
+DEFAULT_LOG_FORMAT = '%(asctime)s %(name)s:%(lineno)s %(funcName)s [%(levelname)s]: %(message)s'
 
 # ZABBIX関連の固定値とか
 ZABBIX_DEFAULT_AUTH = {'user': 'Admin', 'password': 'zabbix'}
@@ -128,6 +131,12 @@ def LISTA_ALL_IN_LISTB(listA=[], listB=[]):
 
 # ノード名の確認
 def CHECK_ZABBIX_SERVER_NAME(endpoint, name):
+    '''
+    Zabbix公式がapiinfo.servername()実装したらそっち使うので
+    そのときimport requestsまとめて消すためにこっちに入れておく
+    '''
+    import requests
+
     prefix = '<div class="server-name">'
     suffix = '</div>'
     res = requests.get(endpoint)
@@ -153,6 +162,9 @@ class ZabbixCloneConfig():
         self.directMaster = False
         self.configFile = None
         self.result = self.readConfig(**params)
+
+        # loggerインスタンス
+        self.LOGGER = __LOGGER__(self.logLevel, self.logFormat)
 
     def readConfig(self, **params):
         '''
@@ -197,6 +209,8 @@ class ZabbixCloneConfig():
             CONFIG.update({param: value})
 
         # クラス変数化
+        self.logLevel = CONFIG.get('log_level', DEFAULT_LOG_LEVEL)
+        self.logFormat = CONFIG.get('log_format', DEFAULT_LOG_FORMAT)
         self.yes = CONFIG.get('yes', False)
         self.quiet = CONFIG.get('quiet', False)
         # ノード名
@@ -511,6 +525,9 @@ class ZabbixCloneParameter():
     '''
 
     def __init__(self, version):
+        # loggerインスタンス
+        self.LOGGER = __LOGGER__('INFO', DEFAULT_LOG_FORMAT)
+
         if version:
             version = {
                 'major': version.major,
@@ -1325,6 +1342,9 @@ class ZabbixCloneDatastore():
         if not isinstance(CONFIG, ZabbixCloneConfig):
             sys.exit('ZabbixCloneDatastore, Bad Config.')
 
+        # loggerインスタンス
+        self.LOGGER = __LOGGER__(CONFIG.logLevel, CONFIG.logFormat)
+
         # directMasterではデータストアの設定の必要なし
         # データストアへの接続情報
         self.storeType = CONFIG.storeType
@@ -2099,6 +2119,9 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
 
     def __init__(self, CONFIG):
 
+        # loggerインスタンス
+        self.LOGGER = __LOGGER__(CONFIG.logLevel, CONFIG.logFormat)
+
         # pyzabbixインスタンス
         self.ZAPI = None
         # 生成した新バージョンデータ
@@ -2853,15 +2876,15 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             if function in self.__dir__():
                 result = getattr(self, function)()
                 if result == ZC_COMPLETE:
-                    rWord = 'Success'
+                    rWord = 'Success.'
                 elif result[0]:
                     rWord = result[1]
                 else:
-                    rWord = 'Failed'
+                    rWord = 'Failed.'
 
             # 表示（仮）
             space = ' ' * (charMax - len(method))
-            display.append(f'{TAB*3}{method}{space}: {rWord}.')
+            display.append(f'{TAB*3}{method}{space}: {rWord}')
 
             if not result[0]:
                 break
@@ -5249,7 +5272,6 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             function = host['function']
             name = host['name']
             data = host['data']
-            dispCount = host['dispCount']
             res = 'C' if function == 'create' else 'U'
             try:
                 getattr(self.ZAPI.host, function)(**data)
@@ -5260,12 +5282,9 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 res = 'X'
             # 表示（仮）
             print(f'{res}', end='', flush=True)
-            if dispCount == WIDE_COUNT:
-                print(f'\n{TAB*3}', end='', flush=True)
             return result
 
         # 表示（仮）
-        dispCount = T_COUNT*3
         print(f'\n{TAB*2}Host Import[{len(hosts)}]:\n{TAB*3}', end='', flush=True)
 
         # host.createの並列実行、実行数はphp-fpmのフォーク数以下にする
@@ -5273,12 +5292,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         future_list = []
         with futures.ThreadPoolExecutor(max_workers=self.CONFIG.phpWorkerNum) as executor:
             for host in hosts:
-                host['dispCount'] = dispCount
-                dispCount += 1
                 future = executor.submit(importHost, host)
                 future_list.append(future)
-                if dispCount == WIDE_COUNT:
-                    dispCount = T_COUNT*3
         futures.as_completed(fs=future_list)
         # 表示（仮）
         result = [item._result for item in future_list]
@@ -6056,6 +6071,15 @@ def inputParameters():
         help='clone: Execute Cloning, showversions: show versions in store, showdata: show version\'s data(requierd ---version)'
     )
     parser.add_argument(
+        '-l', '--log-level',
+        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+        help='ログレベル、デフォルトDEBUG'
+    )
+    parser.add_argument(
+        '--log-format',
+        help='ログフォーマットのカスタマイズ（loggingフォーマット）'
+    )
+    parser.add_argument(
         '-v', '--version',
         help='version指定'
     )
@@ -6285,6 +6309,12 @@ def main():
     params = inputParameters()
     if not params:
         sys.exit('wrong parameters')
+
+    # logger初期化
+    logLevel = params.get('log_level', DEFAULT_LOG_LEVEL)
+    logFormat = params.get('log_format', DEFAULT_LOG_FORMAT)
+    LOGGER = __LOGGER__(logLevel, logFormat)
+
     # 実行コマンド
     command = params.pop('command', 'clone')
     # 進捗の表示
@@ -6482,6 +6512,23 @@ def main():
             pass
             
     sys.exit(0)
+
+def __LOGGER__(logLevel='DEBUG', logFormat=DEFAULT_LOG_FORMAT):
+    logLevel = logLevel.upper()
+    if logLevel not in ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']:
+        logLevel == 'DEBUG'
+    logger = getattr(logging, 'getLogger')(__name__)
+    logger = __HANDLER__(logger, 'StreamHandler', logLevel, logFormat)
+    logger.setLevel(getattr(logging, logLevel))
+    logger.propagate = False
+    return logger
+
+def __HANDLER__(logger, handler, logLevel, logFormat):
+    handler = getattr(logging, handler)()
+    handler.setLevel(logLevel)
+    handler.setFormatter(getattr(logging, 'Formatter')(logFormat))
+    logger.addHandler(handler)
+    return logger
 
 if __name__ == '__main__':
     main()
