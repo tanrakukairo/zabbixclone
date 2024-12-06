@@ -93,7 +93,7 @@ Checking operation within Windows11pro and alpine:latest container.
 ## Requirement
 
 * Zabbix 4.0+
-* Python 3.x+ (tested 3.11, Maybe 3.x+ can run it.)
+* Python 3.x+ (tested 3.11, string-loglevel is used for logging's setLevel().)
 
 excluding development versions.
 
@@ -818,6 +818,9 @@ Other than that, there are many patterns, so if anyone tries it, please let me k
 
 |master|worker|ZabbixCloud|file|dydb|redis|direct|
 |:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+|7.0|8.0||||||
+|7.0|7.4||||||
+|7.0|7.2||||||
 |7.0|7.0|OK|OK|OK|OK|OK|
 |6.0|7.0|*1|OK|-|-|-|
 |6.0|6.4|N/A|OK|-|-|-|
@@ -827,9 +830,10 @@ Other than that, there are many patterns, so if anyone tries it, please let me k
 |5.0|5.4|N/A|OK|-|-|-|
 |5.0|5.2|N/A|OK|-|-|-|
 |5.0|5.0|N/A|OK|-|-|-|
+|4.2|5.0|N/A|OK|-|-|-|
 |4.0|5.0|N/A|-|-|-|-|
-|4.2|4.4|N/A|OK?|-|-|-|
-|4.2|4.2|N/A|OK?|-|-|-|
+|4.2|4.4|N/A|OK|-|-|-|
+|4.2|4.2|N/A|OK|-|-|-|
 |4.0|4.2|N/A|-|-|-|-|
 
 *1: Only while ZabbixCloud is Zabbix7.0

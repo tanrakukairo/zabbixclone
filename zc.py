@@ -27,10 +27,7 @@ import inspect
 import argparse
 import shutil
 import textwrap
-
 import logging
-DEFAULT_LOG_LEVEL = 'DEBUG'
-DEFAULT_LOG_FORMAT = '%(asctime)s %(name)s:%(lineno)s %(funcName)s [%(levelname)s]: %(message)s'
 
 # ZABBIX関連の固定値とか
 ZABBIX_DEFAULT_AUTH = {'user': 'Admin', 'password': 'zabbix'}
@@ -115,6 +112,66 @@ ZC_DEFAILT_ALERT = {
     }
 }
 
+DEFAULT_LOG_LEVEL = 'INFO'
+DEFAULT_LOG_DATE = '%Y-%m-%d %H:%M:%S'
+DEFAULT_LOG_FORMAT = '%(asctime)s.%(msecs)d %(name)s %(funcName)s:%(lineno)s [%(levelname)s]: %(message)s'
+DEFAULT_LOG_STREAM = {
+    'handler': 'StreamHandler',
+    'format': '%(message)s'
+}
+DEFAULT_LOG_FILE = {
+    'handler': 'FileHandler',
+    'format': DEFAULT_LOG_FORMAT,
+    'option': {
+        'filename': os.path.join(
+            os.environ.get('userprofile'),
+            ZC_FILE_STORE[1],
+            'zc',
+            'log',
+            'zc.log'
+        ) if os.name == 'nt' else os.path.join(
+            ZC_FILE_STORE[0],
+            'zc',
+            'log',
+            'zc.log'
+        )
+    }
+}
+DEFAULT_LOG = {
+    'logName': __name__,
+    'logLevel': DEFAULT_LOG_LEVEL,
+    'logHandlers': [DEFAULT_LOG_STREAM]
+}
+
+def __LOGGER__(**params):
+    # パラメーター処理
+    logName = params.get('logName', __name__)
+    logLevel = params.get('logLevel', DEFAULT_LOG_LEVEL).upper()
+    if logLevel not in ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']:
+        logLevel == DEFAULT_LOG_LEVEL
+    logHanders = params.get('logHandlers', [DEFAULT_LOG_STREAM]) 
+    # ロガー初期化
+    logger = getattr(logging, 'getLogger')(logName)
+    for handler in logHanders:
+        logger = __HANDLER__(
+            logger,
+            handler['handler'],
+            logLevel,
+            handler['format'],
+            **handler.get('option', {})
+        )
+    logger.setLevel(getattr(logging, logLevel))
+    logger.propagate = False
+    return logger
+
+def __HANDLER__(logger, handler, level, format, **option):
+    # ハンドラー追加
+    handler = getattr(logging, handler)(**option)
+    handler.setLevel(level)
+    handler.setFormatter(getattr(logging, 'Formatter')(fmt=format, datefmt=DEFAULT_LOG_DATE))
+    logger.addHandler(handler)
+    return logger
+
 # 実行時のunixtime生成（UTC）
 def UNIXTIME():
     return int(timegm(datetime.now(UTC).timetuple()))
@@ -158,13 +215,20 @@ class ZabbixCloneConfig():
     '''
 
     def __init__(self, **params):
+        # logger初期化
+        if params.get('LOGGER'):
+            self.LOGGER = params['LOGGER']
+        else:
+            logConfig = DEFAULT_LOG
+            if params.get('log_level'):
+                logConfig['logLevel'] = params['log_level']
+            logConfig['logName'] = params.get('log_name', __name__)
+            self.LOGGER = __LOGGER__(**logConfig)
+
         self.result = None
         self.directMaster = False
         self.configFile = None
         self.result = self.readConfig(**params)
-
-        # loggerインスタンス
-        self.LOGGER = __LOGGER__(self.logLevel, self.logFormat)
 
     def readConfig(self, **params):
         '''
@@ -210,7 +274,6 @@ class ZabbixCloneConfig():
 
         # クラス変数化
         self.logLevel = CONFIG.get('log_level', DEFAULT_LOG_LEVEL)
-        self.logFormat = CONFIG.get('log_format', DEFAULT_LOG_FORMAT)
         self.yes = CONFIG.get('yes', False)
         self.quiet = CONFIG.get('quiet', False)
         # ノード名
@@ -392,55 +455,59 @@ class ZabbixCloneConfig():
         パラメータ情報の表示
         （仮）
         '''
-        print('[Zabbix Cloning Configurations]')
+        dispMessage = []
+
+        line = '[Zabbix Cloning Configurations]'
+        dispMessage.append(line)
             
         # 設定ファイル関連
         if self.configFile:
-            print(f'{TAB}Config File: {self.configFile}')
+            line = f'{TAB}Config File: {self.configFile}'
         else:
-            print(f'{TAB}No Config Files Mode: YES')
+            line = f'{TAB}No Config Files Mode: YES'
+        dispMessage.append(line)
 
         # ノード関連
-        print(f'{TAB}Target Node: {self.node}')
-        print(f'{TAB*2}Role: {self.role}')
-        print(f'{TAB*2}Zabbix Endpoint: {self.endpoint}')
+        dispMessage.append(f'{TAB}Target Node: {self.node}')
+        dispMessage.append(f'{TAB*2}Role: {self.role}')
+        dispMessage.append(f'{TAB*2}Zabbix Endpoint: {self.endpoint}')
         if self.zabbixCloud:
-            print(f'{TAB*2}ZabbixCloud Node: YES')
+            dispMessage.append(f'{TAB*2}ZabbixCloud Node: YES')
 
         # 認証関連
         if self.token:
-            print(f'{TAB}Authentication Method: TOKEN')
+            dispMessage.append(f'{TAB}Authentication Method: TOKEN')
         else:
             user = self.auth['user']
-            print(f'{TAB}Authentication Method: PASSWORD')
-            print(f'{TAB*2}User: {user}')
+            dispMessage.append(f'{TAB}Authentication Method: PASSWORD')
+            dispMessage.append(f'{TAB*2}User: {user}')
         if self.updatePassword == 'YES':
-            print(f'{TAB}Update Password: YES')
+            dispMessage.append(f'{TAB}Update Password: YES')
         if self.selfCert:
-            print(f'{TAB}Self Certification Use: YES')
+            dispMessage.append(f'{TAB}Self Certification Use: YES')
 
         # 動作設定関連
         if self.forceInitialize:
-            print(f'{TAB}Force Initialize with Worker: YES')
+            dispMessage.append(f'{TAB}Force Initialize with Worker: YES')
         if self.forceUseip:
-            print(f'{TAB}Force Use IP Address Monitoring: YES')
+            dispMessage.append(f'{TAB}Force Use IP Address Monitoring: YES')
         if self.hostUpdate:
             if self.forceHostUpdate:
-                print(f'{TAB}Force Update Exist Hosts: YES')
+                dispMessage.append(f'{TAB}Force Update Exist Hosts: YES')
             else:
-                print(f'{TAB}Update Exist Hosts: YES')
+                dispMessage.append(f'{TAB}Update Exist Hosts: YES')
         if self.noDelete:
-            print(f'{TAB}Don\'t Delete Worker-Node Items: YES')
+            dispMessage.append(f'{TAB}Don\'t Delete Worker-Node Items: YES')
         if self.checknowExec:
-            print(f'{TAB}Execute CheckNow after Host Cloning: Yes')
-            print(f'{TAB*2}CheckNow TargetInterval: {self.checknowInterval}')
-            print(f'{TAB*2}CheckNow Wait Sec for Data Apply: {self.checknowWait}')
+            dispMessage.append(f'{TAB}Execute CheckNow after Host Cloning: Yes')
+            dispMessage.append(f'{TAB*2}CheckNow TargetInterval: {self.checknowInterval}')
+            dispMessage.append(f'{TAB*2}CheckNow Wait Sec for Data Apply: {self.checknowWait}')
         if self.templateSkip:
-            print(f'{TAB}Configuration Import/Export Skip Template: Yes')
+            dispMessage.append(f'{TAB}Configuration Import/Export Skip Template: Yes')
         if self.templateSeparate != ZC_TEMPLATE_SEPARATE and self.role == 'master':
-            print(f'{TAB}Configuration Export Separate Count: {self.templateSeparate}')
+            dispMessage.append(f'{TAB}Configuration Export Separate Count: {self.templateSeparate}')
         if self.phpWorkerNum != PHP_WORKER_NUM:
-            print(f'{TAB}Number of Parallel Excution Create/Update Hosts: {self.phpWorkerNum}') 
+            dispMessage.append(f'{TAB}Number of Parallel Excution Create/Update Hosts: {self.phpWorkerNum}') 
 
         # ストア関連
         if self.storeType == 'dydb':
@@ -453,70 +520,75 @@ class ZabbixCloneConfig():
             storeType = 'Local File'
         else:
             storeType = f'Extend Store {self.storeType}'
-        print(f'{TAB}Store Type: {storeType}')
+        dispMessage.append(f'{TAB}Store Type: {storeType}')
         if self.storeType == 'dydb':
             if self.storeConnect.get('aws_region'):
                 region = self.storeConnect['aws_region']
-                print(f'{TAB*2}AWS Region: {region}')
+                dispMessage.append(f'{TAB*2}AWS Region: {region}')
         elif self.storeType == 'redis':
             ep = self.storeConnect['redis_host'] + ':' + str(self.storeConnect['redis_port'])
-            print(f'{TAB*2}Redis Endpoint: {ep}')
+            dispMessage.append(f'{TAB*2}Redis Endpoint: {ep}')
         elif self.storeType == 'direct':
             node = self.storeConnect['direct_node']
             ep = self.storeConnect['direct_endpoint']
-            print(f'{TAB*2}Master-Node: {node} ({ep})')
+            dispMessage.append(f'{TAB*2}Master-Node: {node} ({ep})')
         elif self.storeType == 'extend':
             for name, item in self.storeConnect:
-                print(f'{TAB*2}Extend Store Parameter {name}: {item}')
+                dispMessage.append(f'{TAB*2}Extend Store Parameter {name}: {item}')
         else:
             pass
 
         # DB関連
         if self.dbConnect:
-            print(f'{TAB}Custom DB Connection: ')
+            dispMessage.append(f'{TAB}Custom DB Connection: ')
             for param in ['host', 'name', 'port', 'user', 'password']:
                 if self.dbConnect.get(param):
                     if param == 'password':
                         item = 'Custom Password'
                     else:
                         item = self.dbConnect[param]
-                    print(f'{TAB*2}DB{param.capitalize()}: {item}')
+                    dispMessage.append(f'{TAB*2}DB{param.capitalize()}: {item}')
 
         # 暗号化関連
         if self.secretGlobalmacro:
             macros = ', '.join([macro['macro'] for macro in self.secretGlobalmacro])
-            print(f'{TAB}Set Secret GlobalMacro: {macros}')
+            dispMessage.append(f'{TAB}Set Secret GlobalMacro: {macros}')
         if self.proxyPsk:
             proxies = ', '.join(self.proxyPsk.keys())
-            print(f'{TAB}Set Proxy PSK: {proxies}')
+            dispMessage.append(f'{TAB}Set Proxy PSK: {proxies}')
 
         # グローバル設定関連
         if self.settings:
-            print(f'{TAB}Set Custom Global Settings:')
+            dispMessage.append(f'{TAB}Set Custom Global Settings:')
             origin = {"1":'Information', "2":'Warning', "3":'Average', "4":'High', "5":'Disaster'}
             for lv, param in self.settings.get('severity', {}).items():
-                print(f'{TAB*2}AlertLevel.{lv}:')
+                dispMessage.append(f'{TAB*2}AlertLevel.{lv}:')
                 name = param.get('name')
                 color = param.get('color')
                 if name:
-                    print(f'{TAB*3}ChangeName: {origin[lv]} -> {name}')
+                    dispMessage.append(f'{TAB*3}ChangeName: {origin[lv]} -> {name}')
                 if color:
-                    print(f'{TAB*3}ChangeColor: {color}')
+                    dispMessage.append(f'{TAB*3}ChangeColor: {color}')
             for timeout, second in self.settings.get('timeout', {}).items():
-                print(f'{TAB*2}Timeout {timeout}: {second}')
+                dispMessage.append(f'{TAB*2}Timeout {timeout}: {second}')
         if self.enableUser:
             users = ', '.join(self.enableUser.keys())
-            print(f'{TAB}Enable Cloning User: {users}')
+            dispMessage.append(f'{TAB}Enable Cloning User: {users}')
         if self.mediaSettings:
             medias = ', '.join(self.mediaSettings.keys())
-            print(f'{TAB}Use Custom MediaType Setting: {medias}')
+            dispMessage.append(f'{TAB}Use Custom MediaType Setting: {medias}')
             for media, params in self.mediaSettings.items():
                 users = ', '.join([user[0] for user in params['user']])
                 if users:
-                    print(f'{TAB}MediaType[{media}] Set User(s): {users}')
+                    dispMessage.append(f'{TAB}MediaType[{media}] Set User(s): {users}')
         if self.mfaClientSecret:
             mfa = ', '.join(self.mfaClientSecret.keys())
-            print(f'{TAB}MFA Client Secret (MFA Setting Requierd): {mfa}')
+            dispMessage.append(f'{TAB}MFA Client Secret (MFA Setting Requierd): {mfa}')
+
+        dispMessage.append(f'{TAB}Log level: {self.logLevel}')
+
+        self.LOGGER.info('\n'.join(dispMessage))
+
         return
 
 class ZabbixCloneParameter():
@@ -524,9 +596,11 @@ class ZabbixCloneParameter():
     ZabbixAPIのパラメータのバージョン間差異を吸収するクラス
     '''
 
-    def __init__(self, version):
+    def __init__(self, version, logger):
         # loggerインスタンス
-        self.LOGGER = __LOGGER__('INFO', DEFAULT_LOG_FORMAT)
+        logConfig = DEFAULT_LOG
+        logConfig['logLevel'] = 'ERROR'
+        self.LOGGER = logger if logger else __LOGGER__(**logConfig)
 
         if version:
             version = {
@@ -1342,8 +1416,8 @@ class ZabbixCloneDatastore():
         if not isinstance(CONFIG, ZabbixCloneConfig):
             sys.exit('ZabbixCloneDatastore, Bad Config.')
 
-        # loggerインスタンス
-        self.LOGGER = __LOGGER__(CONFIG.logLevel, CONFIG.logFormat)
+        # logger
+        self.LOGGER = CONFIG.LOGGER
 
         # directMasterではデータストアの設定の必要なし
         # データストアへの接続情報
@@ -1758,7 +1832,7 @@ class ZabbixCloneDatastore():
         version = params.get('version')
         versions = []
         # Windowsとその他でディレクトリを変える
-        if os.environ.get('os') == 'Windows_NT':
+        if os.name == 'nt':
             # c:\user\アカウント\マイドキュメント\zc\{uuid}.json
             path = os.path.join(
                 os.environ.get('userprofile'),
@@ -1896,7 +1970,7 @@ class ZabbixCloneDatastore():
                 item['DATA'] = json.loads(bz2.decompress(item['DATA'].value).decode())
                 data.append(item)
             except Exception as e:
-                print(e)
+                self.LOGGER.error(e)
                 return (False, data)
         return (True, data)
 
@@ -2120,7 +2194,6 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
     def __init__(self, CONFIG):
 
         # loggerインスタンス
-        self.LOGGER = __LOGGER__(CONFIG.logLevel, CONFIG.logFormat)
 
         # pyzabbixインスタンス
         self.ZAPI = None
@@ -2139,6 +2212,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         if not CONFIG.result[0]:
             sys.exit(CONFIG.result[1])
         self.CONFIG = CONFIG
+        self.LOGGER = CONFIG.LOGGER
         # APIクライアントの初期化
         result = self.initZabbixApi()
         if not result[0]:
@@ -2181,7 +2255,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 sys.exit(3)
 
         # 継承クラスの初期化（ZabbixCloneParameter）
-        ZabbixCloneParameter.__init__(self, self.VERSION)
+        ZabbixCloneParameter.__init__(self, self.VERSION, self.LOGGER)
 
         if self.CONFIG.storeType != 'direct':
             # データストアを初期化、パラメーターはデータストア内のを使う
@@ -6076,10 +6150,6 @@ def inputParameters():
         help='ログレベル、デフォルトDEBUG'
     )
     parser.add_argument(
-        '--log-format',
-        help='ログフォーマットのカスタマイズ（loggingフォーマット）'
-    )
-    parser.add_argument(
         '-v', '--version',
         help='version指定'
     )
@@ -6310,10 +6380,15 @@ def main():
     if not params:
         sys.exit('wrong parameters')
 
-    # logger初期化
-    logLevel = params.get('log_level', DEFAULT_LOG_LEVEL)
-    logFormat = params.get('log_format', DEFAULT_LOG_FORMAT)
-    LOGGER = __LOGGER__(logLevel, logFormat)
+    logConfig = DEFAULT_LOG
+    logConfig['logLevel'] = params.get('log_level', DEFAULT_LOG_LEVEL)
+    logConfig['logName'] = params.get('log_name', 'ZabbixClone')
+    if not params.get('quiet'):
+        logConfig['logHandlers'] = [DEFAULT_LOG_FILE, DEFAULT_LOG_STREAM]
+    else:
+        logConfig['logHandlers'] = [DEFAULT_LOG_FILE]
+    LOGGER = __LOGGER__(**logConfig)
+    params['LOGGER'] = LOGGER
 
     # 実行コマンド
     command = params.pop('command', 'clone')
@@ -6332,9 +6407,11 @@ def main():
         node = ZabbixClone(config)
 
         if config.storeType == 'direct':
-            masterConfig = ZabbixCloneConfig(**params)
-            masterConfig.changeDirectMaster()
-            master = ZabbixClone(masterConfig)
+            logConfig['logName'] = 'DirectMaster'
+            params['LOGGER'] = __LOGGER__(**logConfig)
+            directConfig = ZabbixCloneConfig(**params)
+            directConfig.changeDirectMaster()
+            master = ZabbixClone(directConfig)
 
         # 表示（仮）
         if not config.quiet:
@@ -6342,7 +6419,7 @@ def main():
         if not config.yes:
             if not config.quiet:
                 inputKey = input('\nContinue? [y/N]: ')
-                if inputKey in ['y', 'Y', 'yes', 'YES']:
+                if inputKey.upper() in ['Y', 'YES']:
                     pass
                 else:
                     sys.exit('[ABORT]')
@@ -6512,23 +6589,6 @@ def main():
             pass
             
     sys.exit(0)
-
-def __LOGGER__(logLevel='DEBUG', logFormat=DEFAULT_LOG_FORMAT):
-    logLevel = logLevel.upper()
-    if logLevel not in ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']:
-        logLevel == 'DEBUG'
-    logger = getattr(logging, 'getLogger')(__name__)
-    logger = __HANDLER__(logger, 'StreamHandler', logLevel, logFormat)
-    logger.setLevel(getattr(logging, logLevel))
-    logger.propagate = False
-    return logger
-
-def __HANDLER__(logger, handler, logLevel, logFormat):
-    handler = getattr(logging, handler)()
-    handler.setLevel(logLevel)
-    handler.setFormatter(getattr(logging, 'Formatter')(logFormat))
-    logger.addHandler(handler)
-    return logger
 
 if __name__ == '__main__':
     main()
