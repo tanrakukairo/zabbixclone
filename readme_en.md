@@ -93,7 +93,7 @@ Checking operation within Windows11pro and alpine:latest container.
 ## Requirement
 
 * Zabbix 4.0+
-* Python 3.x+ (tested 3.11, string-loglevel is used for logging's setLevel().)
+* Python 3.x+ (tested 3.11, f-string is used.)
 
 excluding development versions.
 

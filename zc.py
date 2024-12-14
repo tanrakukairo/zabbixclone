@@ -9,7 +9,7 @@ https://opensource.org/licenses/mit-license.php
 '''
 __author__  = 'tsuno.teppei'
 __version__ = '0.1.9'
-__date__    = '2024/12/15'
+__date__    = '2024/12/14'
 
 import os
 import sys
@@ -76,7 +76,7 @@ SIZE = shutil.get_terminal_size()
 WIDE_COUNT = SIZE.columns
 LINE_COUNT = SIZE.lines
 T_CHAR = ' '
-T_COUNT = 4
+T_COUNT = 2
 TAB = T_CHAR * T_COUNT
 B_CHAR = '-'
 B_COUNT = WIDE_COUNT - T_COUNT
@@ -114,7 +114,7 @@ ZC_DEFAILT_ALERT = {
 
 DEFAULT_LOG_LEVEL = 'INFO'
 DEFAULT_LOG_DATE = '%Y-%m-%d %H:%M:%S'
-DEFAULT_LOG_FORMAT = '%(asctime)s.%(msecs)d %(name)s %(funcName)s:%(lineno)s [%(levelname)s]: %(message)s'
+DEFAULT_LOG_FORMAT = '%(asctime)s.%(msecs)03d %(name)s %(funcName)s.%(lineno)s [%(levelname)s]: %(message)s'
 DEFAULT_LOG_STREAM = {
     'handler': 'StreamHandler',
     'format': '%(message)s'
@@ -186,6 +186,16 @@ def LISTA_ALL_IN_LISTB(listA=[], listB=[]):
         return False
     return all(map(listB.__contains__, listA))
 
+def PRINT_PROG(value, quiet=False):
+    if not quiet:
+        print(value, end='', flush=True)
+    return
+
+def PRINT_TAB(num, quiet=False):
+    if not quiet:
+        print(TAB*num, end='', flush=True)
+    return
+
 # ノード名の確認
 def CHECK_ZABBIX_SERVER_NAME(endpoint, name):
     '''
@@ -244,14 +254,15 @@ class ZabbixCloneConfig():
             pass
         else:
             # 指定された設定ファイルまたはデフォルト設定ファイル
-            self.configFile = params.get('config_file', os.path.join(ZABBIX_CONFIG_PATH, ZC_CONFIG))
-            if os.path.exists(self.configFile) and os.access(self.configFile, os.R_OK):
+            configFile = params.get('config_file', os.path.join(ZABBIX_CONFIG_PATH, ZC_CONFIG))
+            if os.path.exists(configFile) and os.access(configFile, os.R_OK):
+                self.configFile = configFile
                 # 基本設定ファイル読み込み
                 try:
-                    with open(self.configFile, 'r') as f:
+                    with open(configFile, 'r') as f:
                         CONFIG = json.load(f)
                 except Exception as e:
-                    print(e)
+                    self.LOGGER.debug(e)
                     pass
 
             # 引数でのファイル指定なし
@@ -259,6 +270,7 @@ class ZabbixCloneConfig():
                 # ユーザー設定読み込み/上書き
                 nodeConfig = os.path.join(ZABBIX_USER_CONFIG_PATH, ZC_CONFIG)
                 if os.path.exists(nodeConfig) and os.access(nodeConfig, os.R_OK):
+                    self.configFile += ' ' + nodeConfig
                     try:
                         userConf = json.load(f)
                         with open(nodeConfig, 'r') as f:
@@ -390,6 +402,9 @@ class ZabbixCloneConfig():
             self.hostUpdate = True
         # ストアデータにない対象の削除を行わない
         self.noDelete = True if CONFIG.get('no_delete', 'YES') == 'YES' else False
+        if self.forceInitialize:
+            # 強制初期化優先
+            self.noDelete = False
         # checknow実行
         self.checknowExec = True if CONFIG.get('checknow_execute', 'NO') == 'YES' else False
         # checknowの対象インターバル
@@ -491,21 +506,21 @@ class ZabbixCloneConfig():
             dispMessage.append(f'{TAB}Force Initialize with Worker: YES')
         if self.forceUseip:
             dispMessage.append(f'{TAB}Force Use IP Address Monitoring: YES')
-        if self.hostUpdate:
-            if self.forceHostUpdate:
-                dispMessage.append(f'{TAB}Force Update Exist Hosts: YES')
-            else:
-                dispMessage.append(f'{TAB}Update Exist Hosts: YES')
-        if self.noDelete:
-            dispMessage.append(f'{TAB}Don\'t Delete Worker-Node Items: YES')
+        if self.forceHostUpdate:
+            dispMessage.append(f'{TAB}Force Update Exist Hosts: YES')
+        else:
+            dispMessage.append('{}Update Exist Hosts: {}'.format(TAB, 'YES' if self.hostUpdate else 'NO'))
+        dispMessage.append('{}Delete Worker-Node Items: {}'.format(TAB, 'NO' if self.noDelete else 'YES'))
+        dispMessage.append('{}Execute CheckNow after Host Cloning: {}'.format(TAB, 'YES' if self.checknowExec else 'NO'))
         if self.checknowExec:
-            dispMessage.append(f'{TAB}Execute CheckNow after Host Cloning: Yes')
             dispMessage.append(f'{TAB*2}CheckNow TargetInterval: {self.checknowInterval}')
             dispMessage.append(f'{TAB*2}CheckNow Wait Sec for Data Apply: {self.checknowWait}')
-        if self.templateSkip:
-            dispMessage.append(f'{TAB}Configuration Import/Export Skip Template: Yes')
-        if self.templateSeparate != ZC_TEMPLATE_SEPARATE and self.role == 'master':
-            dispMessage.append(f'{TAB}Configuration Export Separate Count: {self.templateSeparate}')
+        if self.role == 'master':
+            dispMessage.append('{}Configuration Export Skip Template: {}'.format(TAB, 'YES' if self.templateSkip else 'NO'))
+            if self.templateSeparate != ZC_TEMPLATE_SEPARATE:
+                dispMessage.append(f'{TAB}Configuration Export Separate Count: {self.templateSeparate}')
+        else:
+            dispMessage.append('{}Configuration Import Skip Template: {}'.format(TAB, 'YES' if self.templateSkip else 'NO'))
         if self.phpWorkerNum != PHP_WORKER_NUM:
             dispMessage.append(f'{TAB}Number of Parallel Excution Create/Update Hosts: {self.phpWorkerNum}') 
 
@@ -1408,7 +1423,7 @@ class ZabbixCloneDatastore():
     MSG_NON_SUPPORT      = '%s: Non Supprt Datastore, %s.'
     MSG_CONNECTION_ERROR = '%s: Connection Error, Table:%s.'
     MSG_NO_CONFIG        = '%s: No Exist Connection Config.'
-    MSG_FAILED_CLEAR     = '%s: Failed Clear, table:%s.\n%s'
+    MSG_FAILED_CLEAR     = '%s: Failed Clear, table:%s.'
     MSG_NO_EXIST_VERSION_CLIENT = 'No Exist VERSION client'
     
     def __init__(self, CONFIG):
@@ -1513,7 +1528,7 @@ class ZabbixCloneDatastore():
                 try:
                     # テーブルの有効確認
                     if self.storeTables[table]['client'].table_status != 'ACTIVE':
-                        result = (False, '%s: No-Active Table, %s' % (self.storeType, table))
+                        result = (False, f'{self.storeType}: No-Active Table, {table}')
                 except:
                     # 実行失敗
                     result = (False, self.MSG_CONNECTION_ERROR % (self.storeType, table))
@@ -1632,7 +1647,7 @@ class ZabbixCloneDatastore():
         elif table in ['VERSION', 'DATA']:
             tables = [table]
         else:
-            return (False, 'required ALL / VERSION / DATA, tables:%s.' % table)
+            return (False, f'required ALL / VERSION / DATA, tables:{table}.')
         return self.functionWrapper(tables=tables)
 
     def clearStoreDydb(self, tables):
@@ -1670,7 +1685,8 @@ class ZabbixCloneDatastore():
                             sleep(self.dydbWait)
                             count = 0
             except Exception as e:
-                result = (False, self.MSG_FAILED_CLEAR % (self.storeType, tables, e))
+                self.LOGGER.debug(e)
+                result = (False, self.MSG_FAILED_CLEAR % (self.storeType, tables))
 
         return result
 
@@ -1684,7 +1700,7 @@ class ZabbixCloneDatastore():
             for table in tables:
                 self.storeTables[table]['client'].flushall()
         except Exception as e:
-            result = (False, self.MSG_FAILED_CLEAR % (self.storeType, tables, e))
+            result = (False, self.MSG_FAILED_CLEAR % (self.storeType, tables))
         return result
 
     def deleteRecordInStore(self, versionId='', dataId=''):
@@ -1761,7 +1777,7 @@ class ZabbixCloneDatastore():
             # TIMESTAMPで降順に整列（[0]が最新）してクラス変数に入れる
             self.VERSIONS = sorted(result[1], key=lambda x:x['UNIXTIME'], reverse=True)
         else:
-            result = (False, '%s: %s' % (self.storeType, result[1]))
+            result = (False, f'{self.storeType}: {result[1]}')
 
         return result
 
@@ -1788,7 +1804,8 @@ class ZabbixCloneDatastore():
                 )
             result = (True, versions)
         except Exception as e:
-            result = (False, str(e))
+            self.LOGGER.debug(e)
+            result = (False, [{}])
         return result
 
     def getVersionFromStoreRedis(self, **params):
@@ -1822,7 +1839,8 @@ class ZabbixCloneDatastore():
                 )
             result = (True, versions)
         except Exception as e:
-            result = (False, str(e))
+            self.LOGGER.debug(e)
+            result = (False, [{}])
         return result
 
     def getVersionFromStoreFile(self, **params):
@@ -1883,7 +1901,7 @@ class ZabbixCloneDatastore():
         client = self.storeTables['VERSION']['client']
         result = self.functionWrapper(version=version, client=client)
         if not result[0]:
-            result = (False, '%s: %s\n%s' % (self.storeType, result[1], json.dumps(version)))
+            result = (False, f'{self.storeType}: {result[1]}\n{json.dumps(version)}')
         return result
 
     def setVersionToStoreDydb(self, **params):
@@ -1903,10 +1921,10 @@ class ZabbixCloneDatastore():
             res = client.put_item(**{'Item': version})
             resCode = res['ResponseMetadata'].get('HTTPStatusCode')
             if resCode != 200:
-                result = (False, 'Bad Response put_item, %s.' % resCode)
+                result = (False, f'Bad Response put_item, {resCode}.')
         except Exception as e:
-            # エラー
-            result = (False, 'Except put_item, %s.' % e)
+            self.LOGGER.debug(e)
+            result = (False, f'Except put_item.')
         return result
 
     def setVersionToStoreRedis(self, **params):
@@ -1929,8 +1947,8 @@ class ZabbixCloneDatastore():
             if not res:
                 result = (False, 'Bad Response VERSION hset.')
         except Exception as e:
-            # エラー
-            result = (False, 'Except VERSION hset, %s.' % e)
+            self.LOGGER.debug(e)
+            result = (False, f'Except VERSION hset.')
         return result
 
     def setVersionToStoreFile(self, **params):
@@ -1970,7 +1988,7 @@ class ZabbixCloneDatastore():
                 item['DATA'] = json.loads(bz2.decompress(item['DATA'].value).decode())
                 data.append(item)
             except Exception as e:
-                self.LOGGER.error(e)
+                self.LOGGER.debug(e)
                 return (False, data)
         return (True, data)
 
@@ -1987,7 +2005,7 @@ class ZabbixCloneDatastore():
             # Redisスキャン
             scan = client.scan()
             if version not in [item.decode() for item in scan[1]]:
-                return (False, 'No Exist %s.' % version)
+                return (False, f'No Exist {version}.')
             items = client.hgetall(version)
             # 成型して追加
             for dataId, item in items.items():
@@ -2002,7 +2020,7 @@ class ZabbixCloneDatastore():
                     }
                 )
         except Exception as e:
-            print(e)
+            self.LOGGER.debug(e)
             return (False, f'{e}')
 
         return (True, data)
@@ -2043,7 +2061,8 @@ class ZabbixCloneDatastore():
                 with open(file, 'rb') as f:
                     self.STORE = json.loads(bz2.decompress(f.read()).decode())
             except Exception as e:
-                return (False, 'Cannot Read %s, %s' % (file, e))
+                self.LOGGER.debug(e)
+                return (False, f'Cannot Read {file}.')
 
         return ZC_COMPLETE
 
@@ -2064,7 +2083,7 @@ class ZabbixCloneDatastore():
         # 実行
         result = self.functionWrapper(version=version, dataset=self.STORE, client=client)
         if not result[0]:
-            return (False, '%s: %s' % (self.storeType, result[1]))
+            return (False, f'{self.storeType}: {result[1]}')
         return result
 
     def setDataToStoreDydb(self, **params):
@@ -2097,7 +2116,8 @@ class ZabbixCloneDatastore():
                 try:
                     batch.put_item(**{'Item': item})
                 except Exception as e:
-                    result = (False, 'Faild batch execute put_item, %s' % e)
+                    self.LOGGER.debug(e)
+                    result = (False, f'Faild batch execute put_item.')
                     break
                 # 負荷調整処理、dydbLimit数ごとにdydbWait秒待機する
                 # DynamoDBのWrite側インスタンス数設定に注意すること、AutoScalingしてると負荷によってはめっちゃでかくなる
@@ -2140,7 +2160,8 @@ class ZabbixCloneDatastore():
             if not res:
                 result = (False, 'Bad Response DATA hset')
         except Exception as e:
-            result = (False, 'Except DATA hset, %s' % e)
+            self.LOGGER.debug(e)
+            result = (False, f'Except DATA hset.')
         return result
 
     def setDataToStoreFile(self, **params):
@@ -2181,9 +2202,10 @@ class ZabbixCloneDatastore():
                 with open(file, mode='wb') as f:
                     f.write(bz2.compress(json.dumps(self.STORE, ensure_ascii=False).encode()))
             except Exception as e:
-                result = (False, 'Cannot Write %s, %s' % (file, e))
+                self.LOGGER.debug(e)
+                result = (False, f'Cannot Write {file}.')
         else:
-            result = (False, 'No Such or Not Writable %s' % path)
+            result = (False, f'No Such or Not Writable {path}')
         return result
 
 class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
@@ -2222,7 +2244,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         try:
             self.VERSION = self.ZAPI.api_version()
         except Exception as e:
-            print('Failed Get zabbix version info. %s' % e)
+            self.LOGGER.debug(e)
+            self.LOGGER.error('[ABORT] Cannot Get zabbix version info.')
             sys.exit(2)
 
         # 権限確認
@@ -2237,22 +2260,22 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 data = self.ZAPI.user.get(output='extend', filter={name: self.CONFIG.auth['user']})
                 data = data[0]
             except:
-                print('Failed, get %s Information.' % self.CONFIG.auth['user'])
-                sys.exit(2)
+                self.LOGGER.error('[ABORT] Cannot Get {} Information.'.format(self.CONFIG.auth['user']))
+                sys.exit(3)
             if self.VERSION.major >= 5.2:
                 permit = 'roleid'
             else:
                 permit = 'type'
             if int(data.get(permit)) != ZABBIX_SUPER_ROLE:
-                print('No SuperAdministrator Permission, %s.' % data[name])
-                sys.exit(2)
+                self.LOGGER.error('[ABORT] No SuperAdministrator Permission, {}.'.format(data[name]))
+                sys.exit(4)
 
         # Zabbix DB接続設定、6.0以降はDB直接接続は使用しない
         if self.VERSION.major < 6.0:
             result = self.initDbConnect()
             if not result[0]:
-                print(result[1])
-                sys.exit(3)
+                self.LOGGER.error('[ABORT] DB Error:{}'.format(result[1]))
+                sys.exit(5)
 
         # 継承クラスの初期化（ZabbixCloneParameter）
         ZabbixCloneParameter.__init__(self, self.VERSION, self.LOGGER)
@@ -2308,7 +2331,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 else:
                     # パスワード変更するのでパスワード認証もする
                     token = ''
-            except Exception as e:
+            except:
                 # 認証できなかったトークンは消す
                 token = None
 
@@ -2323,7 +2346,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     # 一度はトークン認証通しているのでそちらで認証しなおし（トークン優先）
                     token = self.CONFIG.token
                     API.login(token=token)
-            except Exception as e:
+            except:
                 if self.CONFIG.updatePassword == 'YES':
                     pass
                 else:
@@ -2404,7 +2427,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             import importlib
             self.dbConnector = importlib.import_module(self.CONFIG.dbConnect.get('library'))
         except Exception as e:
-            return (False, 'DB Connector: Initialize, Failed. %s' % e)
+            self.LOGGER.debug(e)
+            return (False, 'Failed DB Connector Initialize.')
 
         return ZC_COMPLETE
 
@@ -2433,7 +2457,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             # 対象管理者の確認
             admin = self.ZAPI.user.get(output=[idName, name], filter={name: auth['user']})
             if not admin:
-                result = (True, 'No Exist User, %s.' % auth['user'])
+                result = (True, 'No Exist User: {}.'.format(auth['user']))
             else:
                 # パスワード変更
                 change = {
@@ -2447,7 +2471,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 # 変更したパスワードで再認証
                 self.ZAPI.login(*auth)
         except Exception as e:
-            result = (False, 'Failed Update Password for %s. %s' % (auth['user'], e))
+            self.LOGGER.debug(e)
+            result = (False, 'Failed Update Password for {}.'.format(auth['user']))
 
         return result
 
@@ -2492,44 +2517,29 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         result = (False, 'No Exist On-Store Versions.')
                     elif self.VERSION.major < self.getLatestVersion('MASTER_VERSION'):
                         # ワーカーのZabbixバージョンがマスターのZabbixバージョンより古い場合は終了
-                        result = (False, '%s zabbix version > Onstore Data zabbix version.' % self.CONFIG.node)
+                        result = (False, f'{self.CONFIG.node} zabbix version > Onstore Data zabbix version.')
                     else:
                         pass
             else:
                 # 取得失敗
                 result = (False, 'Failed Get Versions.')
-        if not result[0]:
+        process = 'Check Target Version Data'
+        PRINT_TAB(2, self.CONFIG.quiet)
+        if result[0]:
+            self.LOGGER.info('{}: Success.'.format(process))
+        else:
+            self.LOGGER.error('{}: Failed.'.format(process))
             return result
-
-        # 表示（仮）
-        print(f'\n{TAB*2}Get Node Zabbix Data:', end='', flush=True)
 
         # データの初回取得
         result = self.getDataFromZabbix()
-        if not result[0]:
-            print(f'\n{TAB*3}Failed.', end='', flush=True)
-            return result
-        print(f'\n{TAB*3}Success.', end='', flush=True)
-
-        # アラート通知ユーザー確認
-        # デフォルト通知ユーザーがいるか確認
-        alertUser = self.LOCAL['user'].get(ZC_NOTICE_USER)
-        if not alertUser:
-            return (False, 'Failed, firstProcess Need Alert User.')
+        process = 'Get Node Zabbix Data'
+        PRINT_TAB(2, self.CONFIG.quiet)
+        if result[0]:
+            self.LOGGER.info('{}: Success.'.format(process))
         else:
-            data = alertUser['DATA']
-            # ユーザーが有効か確認
-            if data.get('users_status', ZABBIX_DISABLE) != ZABBIX_ENABLE:
-                return (False, 'Failed, firstProcess Notified User enabled')
-            else:
-                # デフォルト通知ユーザーが特権管理者か確認
-                # 5.2対応 権限管理変更 type -> role
-                if self.VERSION.major >= 5.2:
-                    permit = 'roleid'
-                else:
-                    permit = 'type'
-                if int(data.get(permit, -1)) != ZABBIX_SUPER_ROLE:
-                    return (False, 'Failed, firstProcess Notified User Permission is not SuperAdministorator.')
+            self.LOGGER.error('{}: Failed.'.format(process))
+            return result
 
         if self.checkMasterNode():
             # マスターノードの処理
@@ -2539,8 +2549,14 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 # ホストに管理UUIDタグをつける
                 # ワーカーでアップデートするときにホストのユニーク情報として使う予定（ホスト名変更があるとZCではわからないので）
                 # 表示（仮）
-                print(f'\n{TAB*2}Set Host UUID:', end='', flush=True)
-                count = 0
+                process = 'Set Host UUID'
+                count = {
+                    'total': len(self.LOCAL['host']),
+                    'exist': 0,
+                    'set': 0,
+                    'failed': 0
+                }
+                failedHost = []
                 for item in self.LOCAL['host'].values():
                     # ユニーク識別のタグが付いていないことを確認
                     if ZC_UNIQUE_TAG not in [tag['tag'] for tag in item['DATA']['tags']]:
@@ -2559,22 +2575,28 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         try:
                             # 適用実行
                             self.ZAPI.host.update(**option)
-                            result = ZC_COMPLETE
+                            count['set'] += 1
                         except Exception as e:
-                            result = (False, 'Failed, firstProcess set host uuid-tag. %s' % e)
-                            
-                        # 表示（仮）
-                        if count == WIDE_COUNT or count == 0:
-                            print(f'\n{TAB*3}', end='', flush=True)
-                            count = T_COUNT*3
-                        res = 'S' if result[0] else 'X'
-                        print(f'{res}', end='', flush=True)
-                        count += 1
-                # 表示（仮）
-                if count:
-                    print('')
-                else:
-                    print(' Already set All Hosts.')
+                            self.LOGGER.debug(e)
+                            failedHost.append(item['NAME'])
+                            count['failed'] += 1
+                    else:
+                        count['exist'] += 1
+
+                    res = '{}/{} (exist:{}/set:{}/failed:{})'.format(
+                        count['exist'] + count['set'] + count['failed'],
+                        count['total'],
+                        count['exist'],
+                        count['set'],
+                        count['failed']
+                    )
+                    PRINT_PROG(f'\r{TAB*2}{process}: {res}', self.CONFIG.quiet)
+
+                PRINT_PROG(f'\r{TAB*2}', self.CONFIG.quiet)
+                self.LOGGER.info(f'{process}: {res}')
+                if failedHost:
+                    PRINT_TAB(3, self.CONFIG.quiet)
+                    self.LOGGER.error('{}'.format(','.join(failedHost)))
 
         else:
             # ワーカーノード側処理
@@ -2598,42 +2620,44 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 self.VERSIONS.insert(0, version[0])
                 version = version[0]['VERSION_ID']
             
-            # 表示（仮）
+            PRINT_TAB(2, self.CONFIG.quiet)
+            self.LOGGER.info(f'Cloning Version: {version}')
+            if self.CONFIG.targetVersion is False:
+                PRINT_TAB(3, self.CONFIG.quiet)
+                self.LOGGER.info('No Exist Version:{}, Change Latest:{}.'.format(lostVersion, version))
             info = self.getLatestVersion('DESCRIPTION')
             if info:
-                info = info.replace(', ', f'\n{TAB*3}')
-            print(f'\n{TAB*2}Cloning Version:\n{TAB*3}{version}', flush=True)
-            if self.CONFIG.targetVersion is False:
-                print(f'{TAB*3}Change Latest, No Exist:{lostVersion}.', flush=True)
-            if info:
-                print(f'{TAB*2}Version Information:\n{TAB*3}{info}', flush=True)
+                PRINT_TAB(2, self.CONFIG.quiet)
+                self.LOGGER.info('Version Information:\n{}{}'.format(TAB*3, info.replace(', ', f'\n{TAB*3}')))
 
             # 適用状態の確認
-            nowVersion = self.LOCAL['usermacro'].get(ZC_VERSION_CODE, None) if not self.CONFIG.forceInitialize else None
+            nowVersion = self.LOCAL['usermacro'].get(ZC_VERSION_CODE, None)
             if nowVersion:
+                # クローンしたことがあるワーカーノード
                 nowVersion = nowVersion['DATA']['value']
                 try:
                     # バージョン文字列がUUIDか確認
                     uuid.UUID(nowVersion)
-                    initialize = False
+                    initialize = False if not self.CONFIG.forceInitialize else True
                 except:
-                    if re.match('__DIRECT_MASTER_[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z__', nowVersion):
-                        # マスター直接適用なのでパス
-                        initialize = False
+                    if re.match(r'__DIRECT_MASTER_\d{4}-\d{2}-\d{2}T]d{2}:]d{2}:]d{2}Z__', nowVersion):
+                        # マスター直接適用は初期化しない
+                        initialize = False if not self.CONFIG.forceInitialize else True
                     else:
                         # バージョン文字列が不正なので初期化対象
                         initialize = True
             else:
-                initialize = True
+                # クローンしたことがないワーカーノード
+                # 削除しない設定があったら初期化しない
+                initialize = True if not self.CONFIG.noDelete else False
 
             if not initialize:
-                # ワーカーノードの設定削除否定フラグ
+                # 初期化しない
+                # 削除しない設定だったらスキップ
                 if not self.CONFIG.noDelete:
-
-                    # 表示（仮）
-                    print(f'{TAB*2}Method Data Reset:', flush=True)
-
-                    # 適用後も毎回リセットする対象
+                    # 要不要の判断が各メソッドで難しいので初期化しなくても毎回リセットする対象の処理
+                    PRINT_TAB(2, self.CONFIG.quiet)
+                    self.LOGGER.info('Always Data Reset Methods:')
                     for method in ['correlation', 'drule', 'action', 'script', 'maintenance']:
                         api = getattr(self.ZAPI, method)
                         function = 'delete'
@@ -2644,23 +2668,19 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                                 result = ZC_COMPLETE
                             except Exception as e:
                                 # 実行失敗で処理中止
-                                result = (False, 'Failed, firstProcess Delete %s, %s.' % (method, e))
-
-                        # 表示（仮）
-                        res = 'Success' if result[0] else 'Failed'
-                        print(f'{TAB*3}{method}: {res}.')
-
-                        if not result[0]:
-                            break
-
+                                self.LOGGER.debug(e)
+                                result = (False, f'Failed API, {method}')
+                        PRINT_TAB(3, self.CONFIG.quiet)
+                        if result[0]:
+                            self.LOGGER.info('{}: Success.'.format(method))
+                        else:
+                            self.LOGGER.error('{}: Failed.'.format(method))
+                            return result
             else:
-                # バージョン情報がないので初期化する
-                
-                # 表示（仮）
-                print(f'{TAB*2}Start Initialize:', flush=True)
-                print(f'{TAB*3}Method Data Clear:', flush=True)
-
-                # イニシャライズ対象のメソッド、グループは要素があると消せないので最後に消す
+                # 初期化する
+                PRINT_PROG(f'{TAB*2}Start Initialize:\n', self.CONFIG.quiet)
+                process = 'Data Clear'
+                # イニシャライズ対象のメソッド、プロキシ、テンプレート、グループは使っているホストがあると消せないので後回しにする
                 methods = [
                     'usermacro',
                     'correlation',
@@ -2719,24 +2739,46 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             result = ZC_COMPLETE
                         except Exception as e:
                             # 実行失敗で処理中止
-                            result = (False, 'Failed, firstProcess Default Delete %s, %s.' % (method, e))
-                    
-                    # 表示（仮）
-                    res = 'Success' if result[0] else 'Failed'
-                    print(f'{TAB*4}{method}: {res}.')
-
-                    if not result[0]:
-                        break
-
-                if result[0]:
-                    # バージョン情報の挿入
-                    result = self.setVersionCode(init=initialize)
-                    # 表示（仮）
-                    print(f'{TAB*2}Set VersionCode Globalmacro:', end='', flush=True)
+                            self.LOGGER.debug(e)
+                            result = (False, f'Failed API, {method}.')
+                    PRINT_TAB(3, self.CONFIG.quiet)
                     if result[0]:
-                        print(f'\n{TAB*3}Success.', end='', flush=True)
+                        self.LOGGER.info('{}[{}]: Success.'.format(process, method))
                     else:
-                        print(f'\n{TAB*3}Failed.', end='', flush=True)
+                        self.LOGGER.error('{}[{}]: Failed.'.format(process, method))
+                        return result
+
+                # バージョン情報の挿入
+                result = self.setVersionCode(init=initialize)
+                if not result[0]:
+                    return result
+
+            # アラート通知ユーザー確認
+            # デフォルト通知ユーザーがいるか確認
+            alertUser = self.LOCAL['user'].get(ZC_NOTICE_USER)
+            if not alertUser:
+                result = (False, 'Failed, firstProcess Need Alert User.')
+            else:
+                data = alertUser['DATA']
+                # ユーザーが有効か確認
+                if data.get('users_status', ZABBIX_DISABLE) != ZABBIX_ENABLE:
+                    result = (False, 'Failed, firstProcess Notified User enabled')
+                else:
+                    # デフォルト通知ユーザーが特権管理者か確認
+                    # 5.2対応 権限管理変更 type -> role
+                    if self.VERSION.major >= 5.2:
+                        permit = 'roleid'
+                    else:
+                        permit = 'type'
+                    if int(data.get(permit, -1)) != ZABBIX_SUPER_ROLE:
+                        result = (False, 'Failed, firstProcess Notified User Permission is not SuperAdministorator.')
+            process = f'Check Default Alert User[{ZC_NOTICE_USER}]'
+            PRINT_TAB(2, self.CONFIG.quiet)
+            if result[0]:
+                self.LOGGER.info('{}: Success.'.format(process))
+            else:
+                self.LOGGER.error('{}: Failed.'.format(process))
+                return result
 
         if result[0]:
             result = self.getDataFromZabbix()
@@ -2777,9 +2819,9 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             return (False, 'Operate not get or update.')
         if operate in ['replace', 'update']:
             if not tableData:
-                return (False, 'No Exist Table Data: %s' % table)
+                return (False, f'No Exist Table Data: {table}')
             if not isinstance(tableData, list):
-                return (False, 'Wrong Replace/Update Table Data Type, %s.' % type(tableData))
+                return (False, f'Wrong Replace/Update Table Data Type, {type(tableData)}.')
         if not self.CONFIG.dbConnect:
             return (False, 'No Exist DB Connection Config.')
         dbConnect = self.CONFIG.dbConnect
@@ -2809,12 +2851,13 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 if operate == 'get':
                     # 取得 
                     try:
-                        cursor.execute('select * from %s' % table)
+                        cursor.execute(f'select * from {table}')
                         tableData = [[c[0] for c in cursor.description]]
                         [tableData.append(l) for l in cursor.fetchall()]
                         result = (True, tableData)
-                    except:
-                        result = (False, 'DB Direct Select %s, Failed.' % table)
+                    except Exception as e:
+                        self.LOGGER.debug(e)
+                        result = (False, f'Failed DB Direct Select {table}.')
                 else:
                     # 自動コミットの停止
                     if dbConnect['library'] == 'psycopg':
@@ -2827,8 +2870,9 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         # 置き換え
                         try:
                             cursor.execute('DELETE FROM %s' % table)
-                        except:
-                            result = (False, 'DB Direct Delete All data on %s, Failed.' % table)
+                        except Exception as e:
+                            self.LOGGER.debug(e)
+                            result = (False, f'Failed DB Direct Delete All data on {table}.')
                         try:
                             # ヘッダー生成
                             head = ','.join(tableData[0])
@@ -2839,13 +2883,14 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                                 cursor.execute(sql)
                             result = ZC_COMPLETE
                         except Exception as e:
-                            result = (False, 'DB Direct Insert into %s, Failed. %s' % (table, e))
+                            self.LOGGER.debug(e)
+                            result = (False, f'Failed DB Direct Insert into {table}.')
                     elif operate == 'update':
                         # 更新
                         if len(tableData) != 2:
                             result = ('False', 'Wrong Data for %s' % table)
                         elif len(tableData[0]) != len(tableData[1]):
-                            result = ('False', 'Wrong Head/Data length for %s' % table)
+                            result = (False, f'Wrong Head/Data length for {table}')
                         else:
                             try:
                                 # 更新対象
@@ -2859,7 +2904,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                                 cursor.execute(sql)
                                 result = ZC_COMPLETE
                             except Exception as e:
-                                result = (False, 'DB Direct Update %s, Failed. %s' % (table, e))
+                                self.LOGGER.debug(e)
+                                result = (False, f'Failed DB Direct Update {table}.')
                     else:
                         result = (False, 'No Operate.')
                     # 問題なければコミット
@@ -2935,35 +2981,30 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         self.STORE上のsections['POST']のID変換対象のメソッドのデータをIDからNAMEに変換する
         '''
         result = ZC_COMPLETE
-        display = []
+        res = []
 
         if not self.sections.get(section):
-            return (False, 'No section:%s in sections.' % section)
+            return (False, f'No section:{section} in sections.')
         methods = self.sections[section]
-
-        # 表示（仮）
-        charMax = max([len(method) for method in methods])
 
         for method in methods:
             function = 'processing' + method[0].upper() + method[1:]
-            rWord = 'NoProcessing'
             if function in self.__dir__():
                 result = getattr(self, function)()
                 if result == ZC_COMPLETE:
-                    rWord = 'Success.'
+                    rWord = 'Done.'
                 elif result[0]:
                     rWord = result[1]
                 else:
                     rWord = 'Failed.'
-
-            # 表示（仮）
-            space = ' ' * (charMax - len(method))
-            display.append(f'{TAB*3}{method}{space}: {rWord}')
-
+            else:
+                rWord = 'None Processing.'
             if not result[0]:
                 break
+            else:
+                res.append(f'[{method}]: {rWord}')
 
-        return (True, display) if result[0] else result
+        return (True, res) if result[0] else result
 
     def processingRegexp(self):
         '''
@@ -2971,7 +3012,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         '''
         result = ZC_COMPLETE
         if not self.STORE.get('regexp'):
-            return (True, 'No Data, regexp.')
+            return (True, 'No Exist Data.')
         
         for item in self.STORE['regexp']:
             data = item['DATA']
@@ -2994,7 +3035,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         '''
         result = ZC_COMPLETE
         if not self.STORE.get('action'):
-            return (True, 'No Data, action.')
+            return (True, 'No Exist Data.')
 
         # createに不要なパラメータ―
         readOnly = self.discardParameter['action']
@@ -3174,7 +3215,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             operate[op] = opData
                 items.append(item)
         except Exception as e:
-            result = (False, 'processingAction: %s' % e)
+            self.LOGGER.debug(e)
+            result = (False, 'Failed processingAction.')
         self.STORE['action'] = items
         return result
 
@@ -3185,13 +3227,14 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         '''
         result = ZC_COMPLETE
         if not self.STORE.get('mediatype'):
-            return (True, 'No Data, meidatype.')
+            return (True, 'No Exist Data.')
         items = []
         try:
             # 処理はあとで
             pass
         except Exception as e:
-            result = (False, 'processingMediatype: %s' % e)
+            self.LOGGER.debug(e)
+            result = (False, 'Failed processingMediatype.')
         self.STORE['mediatype'] = items
         return result
 
@@ -3202,7 +3245,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         '''
         result = ZC_COMPLETE
         if not self.STORE.get('script'):
-            return (True, 'No Data, script.')
+            return (True, 'No Exist Data.')
 
         items =[]
         try:
@@ -3278,7 +3321,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                                 data.pop('manualinput_default_value', None)
                 items.append(item)
         except Exception as e:
-            result = (False, 'processingScript: %s' % e)
+            self.LOGGER.debug(e)
+            result = (False, 'Failed processingScript')
         self.STORE['script'] = items
         return result
 
@@ -3290,7 +3334,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         '''
         result = ZC_COMPLETE
         if not self.STORE.get('maintenance'):
-            return (True, 'No Data, maitenance.')
+            return (True, 'No Exist Data.')
 
         items = []
         try:
@@ -3383,7 +3427,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             ]
                 items.append(item)
         except Exception as e:
-            result = (False, 'processingMaintenance: %s' % e)
+            self.LOGGER.debug(e)
+            result = (False, 'Failed processingMaintenance.')
         self.STORE['maintenance'] = items
         return result
 
@@ -3395,7 +3440,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         '''
         result = ZC_COMPLETE
         if not self.STORE.get('proxy'):
-            return (True, 'No Data, proxy.')
+            return (True, 'No Exist Data.')
 
         items = []
         deleteTarget = []
@@ -3483,7 +3528,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             data['tls_psk_identity'], data['tls_psk'] = psk
                 items.append(item)
         except Exception as e:
-            result = (False, 'processingProxy: %s' % e)
+            self.LOGGER.debug(e)
+            result = (False, 'Failed processingProxy.')
         self.STORE['proxy'] = items
         # 削除対象がある場合
         if deleteTarget:
@@ -3498,7 +3544,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         '''
         result = ZC_COMPLETE
         if not self.STORE.get('proxygroup'):
-            return (True, 'No Data, proxygroup.')
+            return (True, 'No Exist Data.')
 
         deleteTarget = []
         if self.checkMasterNode():
@@ -3522,7 +3568,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         '''
         result = ZC_COMPLETE
         if not self.STORE.get('drule'):
-            return (True, 'No Data, drule(Network Discvoery).')
+            return (True, 'No Exist Data.')
 
         # dType
         all = list(range(0,16))
@@ -3602,7 +3648,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             check.pop('allow_redirect', None)
                 items.append(item)
         except Exception as e:
-            result = (False, 'processingDrule: %s' % e)
+            self.LOGGER.debug(e)
+            result = (False, 'Failed processingDrule.')
         self.STORE['drule'] = items
         return result
 
@@ -3626,7 +3673,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     [data.pop(param, None) for param in self.discardParameter['sla'] if not data.get(param)]
                 items.append(item)
         except Exception as e:
-            result = (False, 'processingSla: %s' % e)
+            self.LOGGER.debug(e)
+            result = (False, 'Failed processingSla.')
         if not self.checkMasterNode():
             # ワーカー側削除対象
             names = [item['NAME'] for item in self.STORE.get('sla', [])]
@@ -3646,7 +3694,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         '''
         result = ZC_COMPLETE
         if not self.STORE.get('service'):
-            return (True, 'No Data, service.')
+            return (True, 'No Exist Data.')
 
         items= []
         extend = []
@@ -3677,7 +3725,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 # 抜き出した後のデータ
                 items.append(item)
         except Exception as e:
-            result = (False, 'processingService: %s' % e)
+            self.LOGGER.debug(e)
+            result = (False, 'Failed processingService.')
         if not self.checkMasterNode():
             # ワーカー側削除対象
             names = [item['NAME'] for item in self.STORE.get('service', [])]
@@ -3703,7 +3752,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         '''
         result = ZC_COMPLETE
         if not self.STORE.get('serviceExtend'):
-            return (True, 'No Data, serviceExtend.')
+            return (True, 'No Exist Data.')
         # マスターノードで行う処理はない（そもそもないからここを通らないはず）
         if self.checkMasterNode():
             return result
@@ -3738,7 +3787,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     )
                 items.append(item)
         except Exception as e:
-            result = (False, 'processingServiceExtend: %s' % e)
+            self.LOGGER.debug(e)
+            result = (False, 'Failed processingServiceExtend.')
         self.STORE['serviceExtend'] = items
         return result
 
@@ -3748,7 +3798,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         '''
         result = ZC_COMPLETE
         if not self.STORE.get('correlation'):
-            return (True, 'No Data, correlation.')
+            return (True, 'No Exist Data.')
 
         items = []
         try:
@@ -3779,7 +3829,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     continue
                 items.append(item)
         except Exception as e:
-            result = (False, 'processingCorrelation: %s' % e)
+            self.LOGGER.debug(e)
+            result = (False, 'Failed processingCorrelation.')
         self.STORE['correlation'] = items
         return result
 
@@ -3789,7 +3840,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         '''
         result = ZC_COMPLETE
         if not self.STORE.get('user'):
-            return (True, 'No Data, user')
+            return (True, 'No Exist Data.')
         
         items = []
         deleteTarget = []
@@ -3873,7 +3924,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             data['user_medias'] = addMedias
                 items.append(item)
         except Exception as e:
-            return (False, 'processingUser: %s' % e)
+            self.LOGGER.debug(e)
+            return (False, 'Failed processingUser.')
         if not self.checkMasterNode():
             name = self.getKeynameInMethod('user', 'name')
             # ワーカー側削除対象
@@ -3896,7 +3948,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         '''
         result = ZC_COMPLETE
         if not self.STORE.get('usergroup'):
-            return (True, 'No Data, usergroup')
+            return (True, 'No Exist Data.')
 
         items = []
         try:
@@ -3974,7 +4026,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         data.pop('tag_filters', None)
                 items.append(item)
         except Exception as e:
-            return (False, 'processingUsergroup: %s' % e)
+            self.LOGGER.debug(e)
+            return (False, 'Failed processingUsergroup.')
         self.STORE['usergroup'] = items
         return result
 
@@ -3984,7 +4037,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         '''
         result = ZC_COMPLETE
         if not self.STORE.get('role'):
-            return (True, 'No Data, role')
+            return (True, 'No Exist Data.')
         
         items = []
         try:
@@ -4031,7 +4084,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             item['DATA']['rules'].pop(param, None)
                 items.append(item)
         except Exception as e:
-            return (False, 'processingRole: %s' % e)
+            self.LOGGER.debug(e)
+            return (False, 'Failed processingRole.')
         self.STORE['role'] = items
         return result
 
@@ -4041,7 +4095,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         '''
         result = ZC_COMPLETE
         if not self.STORE.get('userdirectory'):
-            return (True, 'No Data, userdirectory')
+            return (True, 'No Exist Data.')
         
         items = []
         try:
@@ -4089,7 +4143,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         data.pop('provision_groups', None)
                 items.append(item)
         except Exception as e:
-            return (False, 'processingUserdirectory: %s' % e)
+            self.LOGGER.debug(e)
+            return (False, 'Failed processingUserdirectory.')
         self.STORE['userdirectory'] = items
         return result
 
@@ -4099,7 +4154,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         '''
         result = ZC_COMPLETE
         if not self.STORE.get('mfa'):
-            return (True, 'No Data, mfa')
+            return (True, 'No Exist Data.')
         
         items = []
         try:
@@ -4132,7 +4187,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         continue
                 items.append(item)
         except Exception as e:
-            return (False, 'processingMfa: %s' % e)
+            self.LOGGER.debug(e)
+            return (False, 'Failed processingMfa.')
         self.STORE['mfa'] = items
         return result
 
@@ -4142,7 +4198,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         '''
         result = ZC_COMPLETE
         if not self.STORE.get('connector'):
-            return (True, 'No Data, connector')
+            return (True, 'No Exist Data.')
         
         items = []
         deleteTarget = []
@@ -4182,7 +4238,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 if connector not in connectors:
                     deleteTarget.append(item['ZABBIX_ID'])
         except Exception as e:
-            return (False, 'processingConnector: %s' % e)
+            self.LOGGER.debug(e)
+            return (False, 'Failed processingConnector.')
         self.STORE['connector'] = items
         if deleteTarget:
             self.STORE['connectorExtend'] = [{'delete': deleteTarget}]
@@ -4194,7 +4251,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         # ストアのデータを加工テンプレート
         result = ZC_COMPLETE
         if not self.STORE.get('newmethod'):
-            return (True, 'No Data, newmethod')
+            return (True, 'No Exist Data.')
         
         items = []
         deleteTarget = []
@@ -4214,7 +4271,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 if name not in newmethods:
                     deleteTarget.append(item['ZABBIX_ID'])
         except Exception as e:
-            return (False, 'processingConnector: %s' % e)
+            self.LOGGER.debug(e)
+            return (False, 'Failed processingMETHOD.')
         self.STORE['newmethod'] = items
         if deleteTarget:
             self.STORE['newmethodExtend'] = [{'delete': deleteTarget}]
@@ -4230,7 +4288,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         例外的な処理はあんまりやりたくないけどしゃあない
         '''
         if not self.STORE.get('authentication'):
-            return (True, 'No Data, authentication')
+            return (True, 'No Exist Data.')
         
         for item in self.STORE['authentication']:
             data = item['DATA']
@@ -4285,7 +4343,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                                 'DATA': data
                         }
         except Exception as e:
-            result = (False, 'Failed, getDataFromZabbix/API %s. %s' % (method, e))
+            self.LOGGER.debug(e)
+            result = (False, f'Failed getDataFromZabbix/API {method}.')
 
         # 6.0以前のマスターノードならばデータベース操作でデータ取得
         if self.checkMasterNode and self.VERSION.major < 6.0:
@@ -4300,7 +4359,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             'DATA': res[1]
                         }
             except Exception as e:
-                result = (False, 'Failed, getDataFromZabbix/DBDirect. %s' % e)
+                self.LOGGER.debug(e)
+                result = (False, 'Failed getDataFromZabbix/DBDirect.')
 
         # IDREPLACE: ZCを実行しているノードのZabbixから取得した値からの生成
         IDREPLACE = {}
@@ -4314,7 +4374,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         IDREPLACE[method][item['NAME']] = item['ZABBIX_ID']
             self.IDREPLACE = IDREPLACE
         except Exception as e:
-            result = (False, 'Failed, getDataFromZabbix/IDREPLACE. %s' % e)
+            self.LOGGER.debug(e)
+            result = (False, 'Failed getDataFromZabbix/IDREPLACE.')
 
         return result
 
@@ -4365,7 +4426,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 # mediatype表記ゆれ対応: 出力のmedia_types（ここでしか出てこない） -> importOption/ExportのmediaTypesに変換 
                 exportData.append(json.loads(data.replace('media_types', 'mediaTypes')).get('zabbix_export'))
             except Exception as e:
-                return (False, 'configuration export, Failed, %s' % e)
+                self.LOGGER.debug(e)
+                return (False, 'Failed configuration export.')
 
         for data in exportData:
             # configurationから不要データを取り除いて成型
@@ -4487,7 +4549,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             method = item.get('METHOD')
             # METHODがないので不正データ
             if not method:
-                return (False, 'wrong data from getDataFromStore, %s' % version)
+                return (False, f'wrong data from getDataFromStore, {version}')
             # self.STOREにMETHODがなければ初期化
             if not self.STORE.get(method):
                 self.STORE[method] = []
@@ -4501,7 +4563,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     }
                 )
             except:
-                return (False, 'Not enough data: %s' % json.dumps(item))
+                return (False, f'Not enough data:{json.dumps(item)}')
         return ZC_COMPLETE
 
     def setVersionDataToStore(self):
@@ -4545,10 +4607,16 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             return (False, 'Not Execute with master-node.')
  
         if self.getLatestVersion('MASTER_VERSION') < 6.0:
-
             if not self.STORE.get('database'):
                 # 入れ替えるデータがない
                 return (True, 'No Exist DB_DIRECT data.')
+
+            process = '{} Database {} {}->{}'.format(
+                'Convert' if self.VERSION.major >= 6.0 else 'Update',
+                'Data to API Data' if self.VERSION.major >= 6.0 else 'Data',
+                self.getLatestVersion['MASTER_VERSION'],
+                self.VERSION.major
+            )
 
             # マスターノード6.0以前のDatabaseデータバージョン間変化の操作
             # ワーカーノード6.0以降用の処理
@@ -4565,6 +4633,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             names = [item['NAME'] for item in self.STORE['database']]
             # 処理順を固定
             for table in tables:
+                PRINT_PROG(f'{TAB*2}{process}[{table}]:', self.CONFIG.quiet)
                 data = self.STORE['database'][names.index(table)]
                 if not data:
                     continue
@@ -4645,9 +4714,14 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         )
                 # DB直用データに追加
                 dbDirect[table] = data
+                PRINT_PROG(f'\r{TAB*2}', self.CONFIG.quiet)
+                self.LOGGER.info(f'{process}[{table}]: Done.')
 
         if self.STORE.get('settings'):
             # マスターノードのデータが6.0以降はAPIで設定
+            process = 'Set Global Settings[API]'
+            subProcess = ''
+            PRINT_PROG(f'{TAB*2}{process}', self.CONFIG.quiet)
             # グローバル設定
             globalSettings = {}
             for item in self.STORE['settings']:
@@ -4656,6 +4730,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 globalSettings.update(item['DATA'])
 
             if self.CONFIG.settings:
+                subProcess = '(Read from Config File)'
                 # 重要度文言設定の読み込み
                 for lv, sev in self.CONFIG.settings.get('severity', {}).items():
                     if sev.get('name'):
@@ -4698,16 +4773,22 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         if ZC_TIMEOUT_LOWER.get(target) and value < ZC_TIMEOUT_LOWER[target]:
                             value = ZC_TIMEOUT_LOWER[target]
                         globalSettings.update({f'timeout_{target}': f'{value}s'})
+                PRINT_PROG(f'\r{TAB*2}', self.CONFIG.quiet)
+                self.LOGGER.info(f'{process}{subProcess}: Done.')
 
             # settingsの適用
             if globalSettings:
                 try:
                     self.ZAPI.settings.update(**globalSettings)
+                    PRINT_PROG(f'\r{TAB*2}', self.CONFIG.quiet)
+                    self.LOGGER.info(f'{process}: Success.')
                 except Exception as e:
-                    result = (False, 'Failed, Settings/update. %s' % e)
+                    self.LOGGER.debug(e)
+                    result = (False, 'Failed Update Global Settings.')
 
             # secret globamacroの追加 secretが5.0以降なので一応確認
-            if result and self.VERSION.major >= 5.0:
+            if result[0] and self.VERSION.major >= 5.0:
+                subProcess = '(Secret GlobalMacro)'
                 for item in self.CONFIG.secretGlobalmacro:
                     try:
                         # 必要項目があるか確認も込みでgetを使わない
@@ -4717,10 +4798,14 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             'type': 1
                         }
                         self.ZAPI.usermacro.createglobal(**macro)
+                        PRINT_PROG(f'\r{TAB*2}', self.CONFIG.quiet)
+                        self.LOGGER.info(f'{process}{subProcess}: Success.')
                     except Exception as e:
-                        result = (False, 'Failed, Secret Globalmacro/create %s. %s' % (item, e))
+                        self.LOGGER.debug(e)
+                        result = (False, f'Failed Secret Globalmacro/create {item}.')
         else:
             # データベース直の適用実行
+            process = 'Set Global Settings[Database]'
             for table in reversed(tables):
                 data = dbDirect[table]
                 if table == 'config':
@@ -4728,7 +4813,11 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 else:
                     result = self.operateDbDirect('replace', table, data)
                 if not result[0]:
+                    PRINT_PROG(f'\r{TAB*2}', self.CONFIG.quiet)
+                    self.LOGGER.error(f'{process}({table}): Failed.')
                     break
+                PRINT_PROG(f'\r{TAB*2}', self.CONFIG.quiet)
+                self.LOGGER.info(f'{process}({table}): Success.')
 
         return result
 
@@ -4833,7 +4922,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         group = 0
         groups = {}
         processed = []
-        templateCount = len(templates)
+        templateTotal = len(templates)
         while templates:
             groups[group] = []
             # グループ０：リンクするテンプレートのない
@@ -4919,19 +5008,14 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 try:
                     self.ZAPI.templategroup.create(**{'name': item})
                 except Exception as e:
-                    print(e)
-                    return (False, 'Failed Convert Hostgroup before 6.2 -> Templategroup 6.2 or later. %s. %s' % (item, e))
+                    self.LOGGER.debug(e)
+                    return (False, f'Failed Convert Hostgroup:{item} -> ver.6.2+ Templategroup.')
 
         # インポートデータ処理
         # テンプレートとホスト以外を全部処理、次にテンプレートをZC_TEMPLATE_SEPARATEずつ処理、ホストは次のファンクション
-        # 表示（仮）
-        print(f'\n{TAB*2}Template Import[{templateCount}]:\n{TAB*3}', end='', flush=True)
-        if self.CONFIG.templateSkip:
-            print('SKIP', end='', flush=True)
-            
-        # 表示（仮）
-        dispRow = 1
-        templateResult = {'success': 0, 'failed': 0, 'messages': []}
+        process = 'Template Import'
+        templateResult = {'total': templateTotal, 'success': 0, 'failed': 0, 'messages': []}
+        PRINT_PROG(f'{TAB*2}{process}:', self.CONFIG.quiet)
         for importItems in importData:
             if self.CONFIG.templateSkip and importItems.get('templates'):
                 continue
@@ -4954,7 +5038,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             try:
                 importItems = '{"zabbix_export":%s}' % json.dumps(importItems, ensure_ascii=False)
             except:
-                return (False, 'Failed Convert ImportFile: %s' % self.getLatestVersion('VERSION_ID'))
+                return (False, 'Failed Convert ImportFile: {}'.format(self.getLatestVersion('VERSION_ID')))
             # インポート実行
             try:
                 result = self.ZAPI.configuration.import_(
@@ -4964,22 +5048,18 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         'source': importItems,
                     }
                 )
+                # テンプレートを処理している場合の結果
                 if templateProcess:
-                    # テンプレートを処理している場合の結果
                     if not result:
                         templateResult['failed'] += 1
                         templateResult['message'].append(
                             {
                                 'name': templateProcess,
-                                'error': 'Failed, No Result return.'
+                                'error': 'No Result return.'
                             }
                         )
-                        # 表示（仮）
-                        print('F', end='', flush=True)
                     else:
                         templateResult['success'] += 1
-                        # 表示（仮）
-                        print('.', end='', flush=True)
             except Exception as e:
                 if templateProcess:
                     templateResult['failed'] += 1
@@ -4989,27 +5069,31 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             'error': e
                         }
                     )
-                    # 表示（仮）
-                    print('X', end='', flush=True)
                 else:
                     # テンプレート以外の失敗は即終了
-                    return (False, 'Failed Execute Import. %s' % e)
-                
-            # テンプレートの実行中の改行
-            # 表示（仮）
-            dispCount = T_COUNT*3*dispRow + templateResult['success'] + templateResult['failed']
-            if templateProcess and dispCount == WIDE_COUNT * dispRow:
-                print(f'\n{TAB*3}', end='', flush=True)
-                dispRow += 1
+                    PRINT_PROG(f'\r{TAB*2}', self.CONFIG.quiet)
+                    self.LOGGER.error(f'{process}: Failed.')                    
+                    return (False, f'Failed Execute Import.\n{e}')
+
+            if templateProcess:
+                res = '{}/{} (success:{}/failed:{})'.format(
+                    templateResult['success'] + templateResult['failed'],
+                    templateResult['total'],
+                    templateResult['success'],
+                    templateResult['failed']
+                )
+                PRINT_PROG(f'\r{TAB*2}{process}: {res}', self.CONFIG.quiet)
 
         # テンプレートインポートの結果
-        # 表示（仮）
-        if len(importData) > 1:
-            print('\n%sSuccess:%s / Failed:%s' % (TAB*3, templateResult['success'], templateResult['failed']))
-            if templateResult['messages']:
-                print(f'{TAB*3}Import Error\'s Message:')
-                for message in  templateResult['messages']:
-                    print('%s%s: \n%s%s' % (TAB*4, message['name'], TAB*5, message['error']))
+        if self.CONFIG.templateSkip:
+            PRINT_PROG(f'\r{TAB*2}', self.CONFIG.quiet)
+            self.LOGGER.info(f'{process}: SKIP.')
+        else:
+            PRINT_PROG(f'\r{TAB*2}', self.CONFIG.quiet)
+            self.LOGGER.info(f'{process}: {res}')
+            for message in  templateResult['messages']:
+                PRINT_PROG(f'\r{TAB*3}', self.CONFIG.quiet)
+                self.LOGGER.error('Import Error[{}]: {}'.format(message['name'], message['error']))
 
         # テンプレート適用したのでZabbixからデータを取得、IDREPLACEの更新
         result = self.getDataFromZabbix()
@@ -5040,20 +5124,20 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             sections = list(reversed(sections))
 
         # データの変換処理
+        PRINT_PROG(f'{TAB*2}Processing {section} section:\n', self.CONFIG.quiet)
+        process = 'Data Convert'
         result = self.processingMethodData(section)
-        if not result[0]:
+        if result[0]:
+            for res in result[1]:
+                PRINT_TAB(3, self.CONFIG.quiet)
+                self.LOGGER.info(f'{process}{res}')
+        else:
+            PRINT_TAB(3, self.CONFIG.quiet)
+            self.LOGGER.error(result[1])
             return result
 
-        # 表示（仮）
-        print(f'\n{TAB*2}Method Data Convert in {section} section:', flush=True)
-        for row in result[1]:
-            print(row)
-        charMax = max([len(item) for item in sections])
-        itemMax = [len(self.STORE.get(item, [])) for item in sections]
-        itemMax = len(str(max(itemMax))) if itemMax else 0
-        print(f'\n{TAB*2}Execute API in {section} section:', end='', flush=True)
-
         # セクションの適用
+        process = 'API Execute'
         for method in sections:
             items = []
             api = getattr(self.ZAPI, method.replace('Extend', ''))
@@ -5082,13 +5166,8 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             # LOCALにないものはcreate
                             items.append({'create': data})
             
-            # 表示（仮）
-            spaceC = ' ' * (charMax - len(method))
-            itemLen = len(items)
-            spaceL = ' ' * (itemMax - itemLen) if itemLen else ''
-            print(f'\n{TAB*3}{method}{spaceC}[{spaceL}{itemLen}]: ',end='', flush=True)
-
             # 実行
+            execResult = {'total': len(items),'create': 0, 'update': 0, 'delete': 0}
             for item in items:
                 if item.get('update'):
                     function = 'update'
@@ -5099,6 +5178,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 else:
                     continue
                 item = item[function]
+                execResult[function] += 1
                 # usermacroのグローバルマクロはファンクションにglobalがつくので加工
                 if method == 'usermacro':
                     function += 'global'
@@ -5107,31 +5187,35 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         if self.CONFIG.noDelete:
                             continue
                         getattr(api, function)(item)
-                        res = 'D'
                     else:
                         getattr(api, function)(**item)
-                        res = 'C' if 'create' in function else 'U'
                 except Exception as e:
-                    res = 'X'                   
-                    result = (False, 'setApiToZabbix, %s.%s, %s' % (method.replace('Extend', ''), function, e))
+                    self.LOGGER.debug(e)
+                    result = (False, 'setApiToZabbix, {} {}.'.format(method.replace('Extend', ''), function))
 
-                # 表示（仮）
-                print(f'{res}', end='', flush=True)
-
+                res = '{}[{}]: {}/{} (create:{}/update:{}/delete:{})'.format(
+                    process,
+                    method,
+                    execResult['create'] + execResult['update'] + execResult['delete'],
+                    execResult['total'],
+                    execResult['create'],
+                    execResult['update'],
+                    execResult['delete']
+                )
+                PRINT_PROG(f'\r{TAB*3}{res}', self.CONFIG.quiet)
                 if not result[0]:
                     return result
+            PRINT_PROG(f'\r{TAB*3}', self.CONFIG.quiet)
             if items:
-                sleep(1)
+                self.LOGGER.info(f'{res}')
             else:
-                # 表示（仮）
-                print('No Items', end='', flush=True)
+                self.LOGGER.info(f'{process}[{method}]: No Data or All Data Excluded.')
+            # Zabbixの適用が終わってないことがあったので待機を追加
+            sleep(1)
 
         # API実行が終わったらローカルを更新
         self.getDataFromZabbix()
 
-        # 表示（仮）
-        print('')
-    
         return ZC_COMPLETE
 
     def setHostToZabbix(self):
@@ -5282,7 +5366,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         }
         '''
         # インターフェイスのアップデートは別にしないといけないっぽいので取り出す
-        updateInterfaces = []
+        ifUpdateHosts = []
         for item in hosts.copy():
             localHost = self.LOCAL['host'].get(item['name'])
             idName = self.getKeynameInMethod('host', 'id')
@@ -5328,7 +5412,7 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 # インターフェイスの更新は別でやらないといけない
                 hostIfs = data.pop('interfaces', None)
                 if hostIfs:
-                    updateInterfaces.append(
+                    ifUpdateHosts.append(
                         {
                             'host': item['name'],
                             'id': hostId,
@@ -5339,27 +5423,32 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             data[idName] = hostId
 
         # ホストの処理
-        result = []
+        hostResult = {'total': len(hosts), 'create': 0, 'update': 0, 'failed': 0}
+        process = 'Host Import'
 
         # 並列処理用のホスト作成ファンクション
         def importHost(host):
             function = host['function']
             name = host['name']
             data = host['data']
-            res = 'C' if function == 'create' else 'U'
             try:
                 getattr(self.ZAPI.host, function)(**data)
+                hostResult[function] += 1
                 result = (True, function)
             except Exception as e:
+                self.LOGGER.debug(e)
                 # hostはインポート失敗しても止めずに進める
-                result = (False, function, name, e)
-                res = 'X'
-            # 表示（仮）
-            print(f'{res}', end='', flush=True)
+                hostResult['failed'] += 1
+                result = (False, function, name)
+            res = '{}/{} (create:{}/update:{}/failed:{})'.format(
+                hostResult['create'] + hostResult['update'] + hostResult['failed'],
+                hostResult['total'],
+                hostResult['create'],
+                hostResult['update'],
+                hostResult['failed']
+            )
+            PRINT_PROG(f'\r{TAB*2}{process}: {res}', self.CONFIG.quiet)
             return result
-
-        # 表示（仮）
-        print(f'\n{TAB*2}Host Import[{len(hosts)}]:\n{TAB*3}', end='', flush=True)
 
         # host.createの並列実行、実行数はphp-fpmのフォーク数以下にする
         # ZabbixのAPI応答ベースの処理なのでProcess*じゃなくてThread*を使ってる
@@ -5369,40 +5458,40 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 future = executor.submit(importHost, host)
                 future_list.append(future)
         futures.as_completed(fs=future_list)
-        # 表示（仮）
-        result = [item._result for item in future_list]
-        create = len([item for item in result if item[0] and item[1] == 'create'])
-        update = len([item for item in result if item[0] and item[1] == 'update'])
-        failed = [item for item in result if not item[0]]
 
-        print(f'\n{TAB*3}Create: {create} / Update: {update}', end='', flush=True)
+        res = '{}/{} (create:{}/update:{}/failed:{})'.format(
+            hostResult['create'] + hostResult['update'] + hostResult['failed'],
+            hostResult['total'],
+            hostResult['create'],
+            hostResult['update'],
+            hostResult['failed']
+        )
+        PRINT_PROG(f'\r{TAB*2}', self.CONFIG.quiet)
+        self.LOGGER.info(f'{process}: {res}')
 
-        if failed:
-            print(f' / Failed: {len(failed)}')
-            print(f'{TAB*3}Failed Hosts:', end='', flush=True)
-            for item in failed:
-                print(f'\n{TAB*4}{item[2]}: {item[3]}')
-        else:
-            print('')
+        failedHost = [item._result for item in future_list if not item._result[0]]
+        if failedHost:
+            PRINT_PROG(f'{TAB*2}Failed Hosts:\n', self.CONFIG.quiet)
+            for item in failedHost:
+                PRINT_TAB(3, self.CONFIG.quiet)
+                self.LOGGER.error(f'Failed {item[1]} {item[2]}')
+            failedHost = [item[2] for item in failedHost]
 
         # インターフェイスのアップデート
         deleteInterfaces = []
-        display = []
-        if updateInterfaces:
+        if ifUpdateHosts:
 
             # 表示（仮）
-            dispCount = T_COUNT*3
-            print(f'\n{TAB*2}Update Interface(s):\n{TAB*3}',end='', flush=True)
+            process = 'Host Interface Update'
+            interfaceResult = {'total':0, 'update':0, 'delete': 0, 'failed': 0, 'skip': 0}
+            PRINT_PROG(f'{TAB*2}{process}:', self.CONFIG.quiet)
 
             idName = self.getKeynameInMethod('host', 'id')
-            for updateIfs in updateInterfaces:
+            for host in ifUpdateHosts:
 
-                hostId = updateIfs['id']
-                hostName = updateIfs['host']
+                hostId = host['id']
+                hostName = host['host']
                 
-                # 表示（仮）
-                disp = f'{TAB*3}{hostName}: '
-
                 try:
                     # インターフェイスの取得
                     hostIfs = self.ZAPI.hostinterface.get(
@@ -5411,13 +5500,12 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             'hostids': hostId
                         }
                     )
+                    interfaceResult['total'] += len(hostIfs)
                 except Exception as e:
+                    self.LOGGER.debug(e)
                     # 現状のホストのインターフェイス情報取得失敗
-                    # 表示（仮）
-                    print('X', end='', flush=True)
-                    disp += 'Failed get Interfaces on Node, %s.' % e
-                    display.append(disp)
-                    dispCount += 1
+                    interfaceResult['total'] += 1
+                    interfaceResult['failed'] += 1
                     continue
 
                 # インターフェイスの確認
@@ -5429,22 +5517,19 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                         pass
                     else:
                         # 対応できないインターフェイス設定なのでアップデート不可、スキップ
-                        # 表示（仮）
-                        print('X', end='', flush=True)
-                        disp += 'Failed, Type >= 2 with Interface >= 2 on Node.'
-                        display.append(disp)
-                        dispCount += 1
+                        interfaceResult['skip'] += 1
                         continue
                 else:
                     # 全部違う種類（typeで判断できる）で１つずつだけなのでアップデート可
                     pass
-                for updateIf in updateIfs['data']:
+                for updateIf in host['data']:
                     # typeとmainが同じインターフェイスを選択
                     targetIf = [
                         item for item in hostIfs if int(item['type']) == updateIf['type'] and int(item['main']) == updateIf['main']
                     ]
                     if not targetIf or len(targetIf) > 1:
                         # このパターンはないはずだけど一応
+                        interfaceResult['skip'] += 1
                         continue
                     targetIf = targetIf[0]
                     # アップデートするインターフェイスはリストから消す、残ったインターフェイスは削除対象
@@ -5453,11 +5538,6 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     # 空の時はdetailsを消す
                     if not targetIf.get('details'):
                         targetIf.pop('details')
-
-                    # 表示（仮）
-                    disp += ZABBIX_IFTYPE[updateIf['type']]
-                    if updateIf['main'] == 1:
-                        disp += '(default)'
 
                     # 変更箇所の確認
                     change = False
@@ -5473,27 +5553,27 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                                 change = True
                                 break
                     if not change:
-                        # 表示（仮）
-                        print('_', end='', flush=True)
-                        dispCount += 1
                         # 変更がないのでスキップ
+                        interfaceResult['skip'] += 1
                         continue
                     updateIf['interfaceid'] = targetIf['interfaceid']
                     try:
                         result = self.ZAPI.hostinterface.update(**updateIf)
-                        # 表示（仮）
-                        print('U', end='', flush=True)
+                        interfaceResult['update'] += 1
                     except Exception as e:
-                        # 表示（仮）
-                        print('X', end='', flush=True)
-                        disp += f'{e}'
+                        self.LOGGER.debug(e)
+                        interfaceResult['failed'] += 1
 
-                    # 表示（仮）
-                    display.append(disp)
-                    dispCount += 1
-                    if dispCount == WIDE_COUNT:
-                        print(f'\n{TAB*3}', end='', flush=True)
-                        dispCount = T_COUNT*3
+                    res = '{}/{} (update:{}/delete:0/skip:{}/failed:{})'.format(
+                        process,
+                        interfaceResult['update'] + interfaceResult['skip'] + interfaceResult['failed'],
+                        interfaceResult['total'],
+                        interfaceResult['update'],
+                        interfaceResult['delete'],
+                        interfaceResult['skip'],
+                        interfaceResult['failed']
+                    )
+                    PRINT_PROG(f'\r{TAB*2}{process}: {res}', self.CONFIG.quiet)
 
                 for hostIf in hostIfs:
                     # 削除対象の処理
@@ -5503,32 +5583,32 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                             'id': hostIf['interfaceid']
                         }
                     )
-
-            # 表示（仮）
-            print('')
         else:
             pass
-
-        # 表示（仮）
-        if display:
-            print(f'\n{TAB*3}Interface Update Error:', flush=True)
-            for disp in display:
-                print(disp)
         
         if deleteInterfaces:
-            # 表示（仮）
-            print(f'{TAB*2}Delete Interface(s):', end='', flush=True)
-
             for delIf in deleteInterfaces:
                 name = delIf['name']
                 try:
                     self.ZAPI.hostinterface.delete(delIf['id'])
-                    res = 'Success'
+                    interfaceResult['delete'] += 1
                 except Exception as e:
-                    res = f'Failed, {e}'
+                    self.LOGGER.debug(e)
+                    interfaceResult['failed'] += 1
 
-                # 表示（仮）
-                print(f'\n{TAB*3}{name}: {res}')
+                res = '{}/{} (update:{}/delete:0/skip:{}/failed:{})'.format(
+                    process,
+                    interfaceResult['update'] + interfaceResult['skip'] + interfaceResult['failed'],
+                    interfaceResult['total'],
+                    interfaceResult['update'],
+                    interfaceResult['delete'],
+                    interfaceResult['skip'],
+                    interfaceResult['failed']
+                )
+                PRINT_PROG(f'\r{TAB*2}{process}: {res}', self.CONFIG.quiet)
+
+            PRINT_PROG(f'\r{TAB*2}', self.CONFIG.quiet)
+            self.LOGGER.info(f'{process}: {res}')
 
         # Zabbixからのデータ再取得
         self.getDataFromZabbix()            
@@ -5538,38 +5618,31 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
             # ストアデータに存在しないホストは削除する
             # 対象IDリスト
             deleteTarget = []
-            result = []
             # update/createの両方処理済みのホスト、ここにないものを削除する
-            importHosts = [host['name'] for host in hosts]
-            for name, item in self.LOCAL['host'].items():
-                if name not in importHosts:
-                    deleteTarget.append(item['ZABBIX_ID'])
+            targetHosts = [host['name'] for host in hosts if host not in failedHost]
+            for name in targetHosts.copy():
+                if not self.LOCAL['host'].get(name):
+                    deleteTarget.append(self.LOCAL['host'][name]['ZABBIX_ID'])
+                else:
+                    targetHosts.remove(name)
             if deleteTarget:
+                process = 'Host Delete'
+                PRINT_TAB(2, self.CONFIG.quiet)
                 try:
                     self.ZAPI.host.delete(*deleteTarget)
-                    # ID->名前変換
-                    deleteTarget = '/'.join([self.replaceIdName('host', host) for host in deleteTarget])
-                    result = True
+                    self.LOGGER.info('{}: Success.\n{}'.format(process, '/'.join(targetHosts)))
+                    # Zabbixからのデータ再取得
+                    self.getDataFromZabbix()
                 except Exception as e:
-                    result = e
-                # Zabbixからのデータ再取得
-                self.getDataFromZabbix()
-
-                # 表示（仮）
-                print(f'{TAB*2}Delete Hosts: {deleteTarget}', flush=True)
-                if result is True:
-                    print('Success.')
-                else:
-                    print(f'Failed, {e}')
+                    self.LOGGER.debug(e)
+                    self.LOGGER.error(f'{process}: Failed.')
 
         # 監視する対象がないので終了
         if not hosts:
             if self.CONFIG.hostUpdate:
                 return (True, 'No Exist Monitoring Hosts with %s.' % self.CONFIG.node)
             else:
-                return (True, 'Not Allowed Host Update, All Excluded.')
-
-        # ホストインポート処理のログ出しまたは画面出力（予）
+                return (True, 'Not Allowed Host Update.')
 
         return ZC_COMPLETE
 
@@ -5606,14 +5679,16 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 self.CONFIG.storeConnect['direct_node'],
                 self.CONFIG.storeConnect['direct_endpoint']
             )
-
+        process = 'Set VersionCode Globalmacro'
         try:
             getattr(self.ZAPI.usermacro, function)(**data)
-            result = ZC_COMPLETE
+            PRINT_TAB(2, self.CONFIG.quiet)
+            self.LOGGER.info(f'{process}: Success')
         except Exception as e:
-            result = (False, 'Failed, %s Version:%s. %s' % (function, version, e))
-
-        return result
+            self.LOGGER.debug(e)
+            PRINT_PROG(f'{process}: Failed', self.CONFIG.quiet)
+            return (False, f'Failed {function}, Version:{version}.')
+        return ZC_COMPLETE
 
     def createNewData(self):
 
@@ -5630,19 +5705,18 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         # ストアデータ格納変数の初期化
         self.STORE = {}
 
-        # 表示（仮）
-        print(f'\n{TAB*2}Export Zabbix Configuration: ', end = '', flush=True)
-
         # configuration.export対象のデータを取得
+        process = 'Export Zabbix Configuration'
+        PRINT_PROG(f'{TAB*2}{process}:', self.CONFIG.quiet)
         result = self.getConfigurationFromZabbix()
+        PRINT_PROG(f'\r{TAB*2}', self.CONFIG.quiet)
         if not result[0]:
+            self.LOGGER.error(f'{process}: Failed.')
             return result
-
-        # 表示（仮）
-        print(f'Done.', end='', flush=True)
-        print(f'\n{TAB*2}Convert Zabbix Data to Clone Data: ', end='', flush=True)
+        self.LOGGER.info(f'{process}: Done.')
 
         # LOCALのデータをSTOREに複製
+        process = 'Convert Zabbix Data to Clone Data'
         for method, data in self.LOCAL.items():
             items = []
             for item in data.values():
@@ -5668,51 +5742,29 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 )
             if items:
                 self.STORE[method] = items
-
-        # 表示（仮）
-        print(f'Done.', end='', flush=True)
-        print(f'\n{TAB*2}Convert PRE section Data: ', end='', flush=True)
+        PRINT_TAB(2, self.CONFIG.quiet)
+        self.LOGGER.info(f'{process}: Done.')
 
         # ID変換が必要なメソッドのデータ変換
-        result = self.processingMethodData('PRE')
-        if not result[0]:
-            return result
-
-        # 表示（仮）
-        print(f'Done.', end='', flush=True)
-        print(f'\n{TAB*2}Convert MID section Data: ', end='', flush=True)
-
-        result = self.processingMethodData('MID')
-        if not result[0]:
-            return result
-
-        # 表示（仮）
-        print(f'Done.', end='', flush=True)
-        print(f'\n{TAB*2}Convert POST section Data: ', end='', flush=True)
-
-        result = self.processingMethodData('POST')
-        if not result[0]:
-            return result
-
-        # 表示（仮）
-        print(f'Done.', end='', flush=True)
-        print(f'\n{TAB*2}Convert ACCOUNT section Data: ', end='', flush=True)
-
-        result = self.processingMethodData('ACCOUNT')
-        if not result[0]:
-            return result
-
-        # 表示（仮）
-        print(f'Done.', end='', flush=True)
-        print(f'\n{TAB*2}Convert Authentication Data: ', end='', flush=True)
+        for proc in ['PRE', 'MID', 'POST', 'ACCOUNT']:
+            process = f'Convert {proc} section Data'
+            PRINT_PROG(f'{TAB*2}{process}:', self.CONFIG.quiet)
+            result = self.processingMethodData(proc)
+            PRINT_PROG(f'\r{TAB*2}', self.CONFIG.quiet)
+            if not result[0]:
+                self.LOGGER.error(f'{process}: Failed.')
+                return result
+            self.LOGGER.info(f'{process}: Done.')
 
         # GLOBAL内でこれだけデータ変換処理が必要なので実行
+        process = f'Convert Authentication Data'
+        PRINT_PROG(f'{TAB*2}{process}:', self.CONFIG.quiet)
         result = self.processingAuthentication()
+        PRINT_PROG(f'\r{TAB*2}', self.CONFIG.quiet)
         if not result[0]:
+            self.LOGGER.error(f'{process}: Failed.')
             return result
-
-        # 表示（仮）
-        print(f'Done.', end='', flush=True)
+        self.LOGGER.info(f'{process}: Done.')
 
         return ZC_COMPLETE
 
@@ -5756,23 +5808,31 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         API = getattr(self.ZAPI, 'maintenance')
 
         # 既存のアップデート中アラート停止の有無を確認、あれば削除
+        process = 'Set AlartStop in Update'
         exists = [item['ZABBIX_ID'] for item in self.LOCAL['maintenance'].values() if item['NAME'] == ZC_MAINTE_NAME]
         if exists:
             try:
                 API.delete(*exists)
-            except:
+            except Exception as e:
+                self.LOGGER.debug(e)
                 return (False, 'Failed Delete Exist AlertStop.')
+        PRINT_TAB(2, self.CONFIG.quiet)
+        self.LOGGER.info(f'{process}: Delete Exists.')
         try:
             result = API.create(**inUpdate)
             if not result.get('maintenanceids'):
-                return (False, 'Failed Set AlertStop.')
+                return (False, 'No Set AlertStop.')
         except Exception as e:
-            return (False, 'Failed Set AlertStop. %s' % e)
+            self.LOGGER.debug(e)
+            return (False, f'Failed Set AlertStop.')
+        PRINT_TAB(2, self.CONFIG.quiet)
+        self.LOGGER.info(f'{process}: Success.')
         
         # Zabbixからのデータ再取得
         self.getDataFromZabbix()
 
-        print(f'\n{TAB*2}AlertStop Period: from NOW to {period}s after.', end='', flush=True)
+        PRINT_TAB(2, self.CONFIG.quiet)
+        self.LOGGER.info(f'{process}: Start from NOW to {period}s after.')
 
         return ZC_COMPLETE
 
@@ -5780,11 +5840,17 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         '''
         アラート情報をユーザーに設定する
         '''
-        # 通知設定しないノードは終了
         if self.CONFIG.role in ZC_NO_NOTICE_ROLE:
-            return ZC_COMPLETE
-        # 有効なメディアタイプがなければ終了
-        if not self.LOCAL.get('mediatype'):
+            # 通知設定しないノードは終了
+            skipMessage = 'Nodes Not to be Notified.'
+        elif not self.LOCAL.get('mediatype'):
+            # 有効なメディアタイプがなければ終了
+            skipMessage = 'No Exist Enabled MediaType.'
+        else:
+            skipMessage = ''
+        if skipMessage:
+            PRINT_TAB(2, self.CONFIG.quiet)
+            self.LOGGER.info(f'SKIP, {skipMessage}.')
             return ZC_COMPLETE
         # ZCに渡されたメディア設定
         mediaSettings = self.CONFIG.mediaSettings
@@ -5856,12 +5922,22 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 else:
                     # ある場合はmediaだけ追加
                     userMediasData[user][userMedias].append(media)
+            PRINT_TAB(2, self.CONFIG.quiet)
+            self.LOGGER.info('Setting Import From ConfigFile: Done.')
+
         # 適用
+        if not userMediasData:
+            return (True, 'No Data.')
         for user, data in userMediasData.items():
+            process = 'API Execute[user.mediatype]'
+            PRINT_TAB(2, self.CONFIG.quiet)
             try:
                 self.ZAPI.user.update(**data)
-            except:
-                return (False, 'Failed Set AlertMedia for %s.' % self.replaceIdName('user', user))
+                self.LOGGER.info(f'{process}: Success.')
+            except Exception as e:
+                self.LOGGER.debug(e)
+                self.LOGGER.error(f'{process}: Failed.')
+                return (False, 'Failed Set AlertMedia for {}.'.format(self.replaceIdName('user', user)))
         return ZC_COMPLETE
 
     def setAuthenticationToZabbix(self):
@@ -5871,8 +5947,10 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         '''
         if not self.STORE.get('authentication'):
             # 認証のAPIがないバージョンではデータがないのでスキップ
-            return (True, 'No Exsit Authentication.')
+            return (True, 'Skip, No Exsit Authentication Data.')
         
+        PRINT_PROG(f'{TAB*2}Processing Authentication Data:\n', self.CONFIG.quiet)
+
         # 認証設定
         data = {}
         [data.update(item['DATA']) for item in self.STORE['authentication']]
@@ -5883,10 +5961,15 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 for param in self.discardParameter['authentication']['ldap']:
                     data.pop(param, None)
                 data.pop('idap_configured', None)
+                PRINT_TAB(3, self.CONFIG.quiet)
+                self.LOGGER.info('Drop LDAP Enable: Done.')
             if not int(data.get('saml_auth_enabled')):
                 for param in self.discardParameter['authentication']['saml']:
                     data.pop(param, None)
                 data.pop('saml_auth_enabled', None)
+                PRINT_TAB(3, self.CONFIG.quiet)
+                self.LOGGER.info('Drop SAML Enable: Done.')
+
         # 6.2対応
         if self.VERSION.major >= 6.2:
             if self.VERSION.major == 6.2:
@@ -5907,14 +5990,17 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                                 }
                             )
                     if ldapParams.get('host'):
+                        process = 'Move LDAP Setting -> UserDirectory'
+                        PRINT_TAB(3, self.CONFIG.quiet)
                         try:
                             res = self.ZAPI.userdirectory.create(**ldapParams)
-                        except:
-                            res = []
-                        if res:
                             data['ldap_auth_enabled'] = 1
                             data['ldap_userdirectoryid'] = res['userdirectoryids'][0]
-    
+                            self.LOGGER.info(f'{process}: Success.')
+                        except:
+                            data['ldap_auth_enabled'] = 0
+                            self.LOGGER.error(f'{process}: Failed.')
+
         # 6.4対応
         if self.VERSION.major >= 6.4:
             # 古いバージョンのパラメーターだったら変換
@@ -5937,13 +6023,14 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                                 }
                             )
                     if samlParams.get('idp_entityid'):
+                        process = 'Move SAML Setting -> UserDirectory'
+                        PRINT_TAB(3, self.CONFIG.quiet)
                         try:
                             res = self.ZAPI.userdirectory.create(**samlParams)
+                            self.LOGGER.info(f'{process}: Success.')
                         except:
-                            res = []
-                        if not res:
                             data['saml_auth_enabled'] = 0
-            
+                            self.LOGGER.error(f'{process}: Failed.')
             # LDAP利用しない
             if int(data.get('ldap_auth_enabled', 0)) == 0:
                 ldap = False
@@ -5962,12 +6049,16 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 saml = True
             if ldap or saml:
                 # LDAP/SAMLどちらかを利用する場合は変換する
-                id = self.replaceIdName('usergroup', data['disabled_usrgrpid'])
+                userGroup = data['disabled_usrgrpid']
+                id = self.replaceIdName('usergroup', userGroup)
                 if id:
                     data['disabled_usrgrpid'] = id
+                    PRINT_TAB(3, self.CONFIG.quiet)
+                    self.LOGGER.info(f'Data Convert[disabled_usrgprid({userGroup})]: Done.')
             else:
                 # LDAP/SAMLどちらも利用しない場合
                 data.pop('disabled_usrgrpid', None)
+
         # 7.0対応
         if self.VERSION.major >= 7.0:
             # MFA利用
@@ -5976,17 +6067,24 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                 data.pop('mfaid', None)
             else:
                 # デフォルト利用のMFAのID変換処理
-                id = self.replaceIdName('mfa', data['mfaid'])
+                useMfa = data['mfaid']
+                id = self.replaceIdName('mfa', useMfa)
                 if id:
                     data['mfaid'] = id
+                    PRINT_TAB(3, self.CONFIG.quiet)
+                    self.LOGGER.info(f'Data Convert[mfaid({useMfa})]: Done.')
+
         # ZabbixCloud対応: HTTP AUTH関連が存在しない
         if self.CONFIG.zabbixCloud:
             for property in self.zabbixCloudSpecialItem['authentication']:
                 data.pop(property, None)
+                PRINT_TAB(3, self.CONFIG.quiet)
+                self.LOGGER.info(f'Drop Parameters for ZabbixCloud[{property}]: Done.')
         try:
             self.ZAPI.authentication.update(**data)
         except Exception as e:
-            return (False, 'Failed, set Authentication. %s' % e)
+            self.LOGGER.debug(e)
+            return (False, f'Failed Set Authentication.')
 
         return ZC_COMPLETE
 
@@ -6024,10 +6122,11 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
                     self.ZAPI.task.create(*option)
                 else:
                     self.ZAPI.task.create(**option)
-                return 'OK'
+                return 'Success.'
             except Exception as e:
-                return f'NG, {e}'
-        
+                self.LOGGER.debug(e)
+                return 'Failed.'
+
         # 更新間隔サーチワード
         interval = []
         for item in self.CONFIG.checknowInterval:
@@ -6069,16 +6168,14 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         except:
             targets = []
 
-        # 表示（仮）
-        print(f'\n{TAB*2}LLDs {len(targets)} items (wait {self.CONFIG.checknowWait}s): ', end='', flush=True)
+        process = f'LLDs {len(targets)} items (wait {self.CONFIG.checknowWait}s)'
+        PRINT_PROG(f'\r{TAB*2}', self.CONFIG.quiet)
         if not targets:
-            print('No Exist LLDs items.')
+            self.LOGGER.info(f'{process}: No Exist LLDs items.')
         else:
             # LLDへのCheckNow実行
             res = checknow(targets)
-
-        # 表示（仮）
-        print(f'{res}', end='', flush=True)
+            self.LOGGER.info(f'{process}: {res}')
 
         # 更新間隔にユーザーマクロで部分一致文字列を適用しているものを抽出
         try:
@@ -6094,16 +6191,12 @@ class ZabbixClone(ZabbixCloneParameter, ZabbixCloneDatastore):
         except:
             targets = []
         if targets:
-            # 表示（仮）
             interval = '/'.join(interval)
-            print(f'\n{TAB*2}TargetInterval[{interval}] {len(targets)} items (wait {self.CONFIG.checknowWait}s): ', end='', flush=True)
-
-            # 実行
+            process = f'TargetInterval[{interval}] {len(targets)} items (wait {self.CONFIG.checknowWait}s)'
+            # LLDへのCheckNow実行
             res = checknow(targets)
-
-            # 表示（仮）
-            print(f'{res}', end='', flush=True)
-
+            PRINT_PROG(f'\r{TAB*2}', self.CONFIG.quiet)
+            self.LOGGER.info(f'{process}: {res}')
 
         return ZC_COMPLETE
 
@@ -6413,7 +6506,6 @@ def main():
             directConfig.changeDirectMaster()
             master = ZabbixClone(directConfig)
 
-        # 表示（仮）
         if not config.quiet:
             config.showParameters()
         if not config.yes:
@@ -6422,10 +6514,13 @@ def main():
                 if inputKey.upper() in ['Y', 'YES']:
                     pass
                 else:
-                    sys.exit('[ABORT]')
+                    LOGGER.info('[USER ABORT]')
+                    sys.exit()
             else:
-                sys.exit('[DO NOT START]')
-        print(f'\n[START] {ZABBIX_TIME()}')
+                LOGGER.info('[DO NOT START]')
+                sys.exit()
+        print()
+        LOGGER.info('[START] {}'.format(ZABBIX_TIME()))
 
         # 実行処理リスト
         functions = [
@@ -6456,9 +6551,10 @@ def main():
             # 初回LLDの実行の対象指定、するかどうか
 
             # パスワード変更
-            functions += [
-                ['changePassword', None]
-            ]
+            if config.updatePassword == 'YES':
+                functions += [
+                    ['changePassword', None]
+                ]
 
             # Directモードの時はデータを直接マスターノードから読み込む
             if config.storeType == 'direct':
@@ -6491,26 +6587,39 @@ def main():
             option = function[1]
             if not quiet:
                 execute = f'{config.role}({config.node}).{func}'
-                print(f'{TAB}{execute}', end=':', flush=True)
+                PRINT_PROG(f'{TAB}{execute}:\n', config.quiet)
             try:
                 if option:
                     result = getattr(node, func)(**option)
                 else:
                     result = getattr(node, func)()
             except Exception as e:
-                print(f'{e}')
-                sys.exit('Execute Function Failed: [%s] ' % '/'.join(function[:1]))
-            if not quiet:
-                if isinstance(result[1], (dict, list, tuple)):
-                    output = json.dumps(result[1], indent=TAB) + f'\n{ZC_COMPLETE[1]}'
+                print('')
+                LOGGER.debug(e)
+                if option:
+                    LOGGER.error(f'[ABORT] {func} option:{option}')
                 else:
-                    output = result[1]
+                    LOGGER.error(f'[ABORT] {func}')
+                sys.exit(254)
+            if isinstance(result[1], (dict, list, tuple)):
+                output = json.dumps(result[1], indent=TAB)
+                output = f'Output:\n{TAB*2}' + output.replace('\n', f'\n{TAB*2}')
+                end = TAB*2 + ZC_COMPLETE[1]
+            else:
+                output = result[1]
+                end = None
             if not result[0]:
-                print(f'\n\n[ABORT] {ZABBIX_TIME()}')
-                print(f'{TAB*2}' + output.replace('\n', f'\n{TAB*2}'))
+                print('')
+                LOGGER.error(f'[ABORT] {func}:{output}')
                 sys.exit(255)
-            print(f'\n{TAB*2}' + output.replace('\n', f'\n{TAB*2}') + '\n')
-        print(f'\n[END] {ZABBIX_TIME()}')
+            if end:
+                PRINT_TAB(2, config.quiet)
+                LOGGER.info(output)
+                PRINT_PROG(f'{end.upper()}\n', config.quiet)
+            else:
+                PRINT_PROG(f'{TAB*2}{output.upper()}\n', config.quiet)
+        PRINT_PROG('\n', config.quiet)
+        LOGGER.info(f'[FINISH] {ZABBIX_TIME()}')
     else:
         # これ以下の実装、全部仮
         # clone以外の動作
