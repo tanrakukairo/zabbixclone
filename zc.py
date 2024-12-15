@@ -6506,8 +6506,7 @@ def main():
             directConfig.changeDirectMaster()
             master = ZabbixClone(directConfig)
 
-        if not config.quiet:
-            config.showParameters()
+        config.showParameters()
         if not config.yes:
             if not config.quiet:
                 inputKey = input('\nContinue? [y/N]: ')
@@ -6519,7 +6518,8 @@ def main():
             else:
                 LOGGER.info('[DO NOT START]')
                 sys.exit()
-        print()
+
+        PRINT_PROG('\n', config.quiet)
         LOGGER.info('[START] {}'.format(ZABBIX_TIME()))
 
         # 実行処理リスト
@@ -6594,7 +6594,7 @@ def main():
                 else:
                     result = getattr(node, func)()
             except Exception as e:
-                print('')
+                PRINT_PROG('\n', config.quiet)
                 LOGGER.debug(e)
                 if option:
                     LOGGER.error(f'[ABORT] {func} option:{option}')
@@ -6609,7 +6609,7 @@ def main():
                 output = result[1]
                 end = None
             if not result[0]:
-                print('')
+                PRINT_PROG('\n', config.quiet)
                 LOGGER.error(f'[ABORT] {func}:{output}')
                 sys.exit(255)
             if end:
